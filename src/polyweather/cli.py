@@ -19,7 +19,7 @@ from . import stations as station_registry
 from .settings import Settings, load_settings
 from .storage import db
 from .util.http import make_client
-from .util.timeutil import ms_to_iso, utcnow
+from .util.timeutil import iso, ms_to_iso, utcnow
 
 log = logging.getLogger("polyweather")
 
@@ -133,14 +133,24 @@ def cmd_ensemble(args, settings, conn) -> int:
             if args.source == "openmeteo":
                 from .weather.openmeteo import OpenMeteoSource
 
-                source = OpenMeteoSource(client, models=tuple(args.models.split(",")))
+                samples = OpenMeteoSource(client, models=tuple(args.models.split(","))).fetch(sts)
+                detail = {}
             else:
-                from .weather.ecmwf_open import EcmwfOpenSource
+                # A run is ~460 MB of paced requests, so each published run is fetched once.
+                from .weather import ecmwf_open
 
-                source = EcmwfOpenSource(client, max_step=args.max_step)
-            samples = source.fetch(sts)
-            written = ensemble.store_samples(conn, settings.data_dir, source.name, samples)
-        return {"source": source.name, "samples": len(samples), "new_files": written}
+                run_time = ecmwf_open.latest_run(client)
+                if run_time is None:
+                    return {"source": args.source, "skipped": "no published run found"}
+                detail = {"run": iso(run_time)}
+                if conn.execute(
+                    "SELECT 1 FROM forecast_fetches WHERE source='ecmwf_open' AND run_init=?", (iso(run_time),)
+                ).fetchone():
+                    return {"source": args.source, **detail, "skipped": "run already archived"}
+                steps = [s for s in ecmwf_open.available_steps(client, run_time) if s <= args.max_step]
+                samples = ecmwf_open.fetch_points(client, run_time, steps, sts)
+            written = ensemble.store_samples(conn, settings.data_dir, args.source, samples)
+        return {"source": args.source, **detail, "samples": len(samples), "new_files": written}
 
     return _job(conn, f"ensemble-{args.source}", run)
 
