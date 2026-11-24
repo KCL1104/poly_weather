@@ -122,6 +122,25 @@ def test_settlement_check_matches_and_freezes_on_mismatch(conn, nyc_event, fixtu
     assert scanner.is_frozen(conn, "KLGA")
     assert conn.execute("SELECT trigger FROM pause_log").fetchone()[0] == "settlement_mismatch"
 
+    # Once explained and thawed, re-checking the same event must not freeze the station again.
+    scanner.thaw_station(conn, "KLGA", "corrected report arrived after resolution")
+    s = settlement_check.run(conn, since="2026-11-09", until="2026-11-09", freeze_on_mismatch=True)
+    assert s.mismatched == 1 and not scanner.is_frozen(conn, "KLGA")
+
+
+def test_settlement_check_does_not_judge_a_day_with_too_few_reports(conn, nyc_event, fixtures):
+    scanner.ingest(conn, [nyc_event])
+    lines = (fixtures / "awc_klga_2026-11-09.txt").read_text().splitlines()
+    rows = []
+    for line in lines[-8:]:  # only the first hours of the window made it into the archive
+        d, h, mi = map(int, re.search(r"(\d{2})(\d{2})(\d{2})Z", line).groups())
+        rows.append(MetarRow("KLGA", dt.datetime(2026, 11, d, h, mi, tzinfo=UTC), line.strip(), "METAR"))
+    store(conn, rows, "awc_api")
+    s = settlement_check.run(conn, since="2026-11-09", until="2026-11-09", freeze_on_mismatch=True)
+    assert (s.matched, s.mismatched, s.no_data) == (0, 0, 1)
+    assert not scanner.is_frozen(conn, "KLGA")
+    assert '"too_few_reports": true' in conn.execute("SELECT detail FROM settlement_checks").fetchone()[0]
+
 
 def test_awc_text_outranks_iem_text_for_the_same_observation(conn):
     t = dt.datetime(2026, 11, 9, 16, 51, tzinfo=UTC)

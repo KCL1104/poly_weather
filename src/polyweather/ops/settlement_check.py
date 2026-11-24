@@ -7,6 +7,7 @@ mismatch on a live check freezes the station until someone has explained it.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import sqlite3
@@ -19,6 +20,12 @@ from ..util.timeutil import now_ms
 from ..weather.metar_store import load_obs
 
 log = logging.getLogger(__name__)
+
+# A day with fewer counted reports than this is not judged: the archive (not the rule)
+# is the likelier cause of any difference, for example on the day the system is installed.
+MIN_REPORTS = 20
+AWC_SOURCES = ("awc_api", "awc_cache")
+EDGE = dt.timedelta(minutes=90)  # an archive "spans" a day if it has reports this close to both ends
 
 
 @dataclass
@@ -45,10 +52,21 @@ def check_event(conn: sqlite3.Connection, event_id: str, *, sources: tuple[str, 
     actual = markets[winners[0]][1].label if len(winners) == 1 else None
 
     day_start, day_end = spec.local_day_bounds_utc()
-    obs = load_obs(conn, spec.station, day_start, day_end, sources=sources)
-    s = settle(spec, obs)
+    if sources is not None:
+        s = settle(spec, load_obs(conn, spec.station, day_start, day_end, sources=sources))
+        used = "+".join(sources)
+    else:
+        # Judge by the resolution source's own reports when its archive spans the whole
+        # local day. Other archives fill in only for days AWC no longer serves; mixing
+        # them in otherwise could add reports AWC never showed.
+        awc_obs = load_obs(conn, spec.station, day_start - EDGE, day_end + EDGE, sources=AWC_SOURCES)
+        spans = any(o.obs_time <= day_start + EDGE for o in awc_obs) and any(o.obs_time >= day_end - EDGE for o in awc_obs)
+        if spans:
+            s, used = settle(spec, awc_obs), "awc"
+        else:
+            s, used = settle(spec, load_obs(conn, spec.station, day_start, day_end)), "all"
     rebuilt = None
-    if s.value_unit is not None:
+    if s.value_unit is not None and s.n_counted >= MIN_REPORTS:
         idx = next((i for i, (_, b) in enumerate(markets) if b.contains(s.value_unit)), None)
         rebuilt = markets[idx][1].label if idx is not None else None
 
@@ -64,7 +82,10 @@ def check_event(conn: sqlite3.Connection, event_id: str, *, sources: tuple[str, 
         "reconstructed_bracket": rebuilt,
         "actual_bracket": actual,
         "is_match": is_match,
-        "detail": json.dumps({"n_reports": s.n_reports, "deciding": list(s.deciding)[:3]}),
+        "detail": json.dumps(
+            {"n_reports": s.n_reports, "deciding": list(s.deciding)[:3], "too_few_reports": s.n_counted < MIN_REPORTS,
+             "sources": used}
+        ),
     }
     conn.execute(
         """INSERT INTO settlement_checks(event_id, station, obs_date, measure, n_counted, value_tenths_c,
@@ -105,6 +126,8 @@ def run(
         args += stations
     summary = CheckSummary()
     for row in conn.execute(q + " ORDER BY s.obs_date, s.station", args).fetchall():
+        before = conn.execute("SELECT is_match FROM settlement_checks WHERE event_id=?", (row["event_id"],)).fetchone()
+        already_known = before is not None and before["is_match"] == 0
         r = check_event(conn, row["event_id"], sources=sources)
         if r is None:
             continue
@@ -121,6 +144,8 @@ def run(
                 "settlement mismatch %s: rebuilt %s, actual %s", row["slug"],
                 r["reconstructed_bracket"], r["actual_bracket"],
             )
-            if freeze_on_mismatch:
+            # A mismatch freezes its station once. Re-checking the same event after a
+            # human has explained it and thawed the station must not freeze it again.
+            if freeze_on_mismatch and not already_known:
                 freeze_station(conn, r["station"], "settlement_mismatch", row["slug"])
     return summary

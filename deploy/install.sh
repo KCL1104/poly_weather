@@ -27,8 +27,12 @@ sudo -u polyweather "$APP/.venv/bin/pip" install --quiet -e "$APP"
 install -m 644 "$APP"/deploy/systemd/*.service "$APP"/deploy/systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload
 
+run() { sudo -u polyweather env $(grep -v '^#' /etc/polyweather.env | xargs) "$APP/.venv/bin/polyweather" "$@"; }
+
 # First catalog scan in import mode, so rule changes that already happened freeze nothing.
-sudo -u polyweather env $(grep -v '^#' /etc/polyweather.env | xargs) "$APP/.venv/bin/polyweather" catalog scan --history --closed-days 3
+run catalog scan --history --closed-days 3
+# Recent METAR history, so the first settlement checks see complete days.
+run metar backfill-awc --days 4
 
 systemctl enable --now polyweather-recorder.service polyweather-metar.service
 for t in catalog nbm lamp ensemble prices check-settlement check-gaps; do
