@@ -47,6 +47,7 @@ LAMP_LAG = dt.timedelta(minutes=40)   # the HH:30 cycle, labelled HH:00 in the a
 GFS_MOS_LAG = dt.timedelta(hours=4, minutes=30)
 ECMWF_LAG = dt.timedelta(hours=7, minutes=50)
 NBS_LAG = dt.timedelta(minutes=45)
+ECMWF_MIN_DAYS = 12
 RNG = np.random.default_rng(20261124)
 
 
@@ -216,9 +217,9 @@ def add_bias_corrected(df: pd.DataFrame, sources: list[str]) -> pd.DataFrame:
     return df
 
 
-def combine(df: pd.DataFrame, sources: list[str], name: str, extra: list[str] = ()) -> pd.DataFrame:
+def combine(df: pd.DataFrame, sources: list[str], name: str, extra: list[str] = (), min_days: int = 30) -> pd.DataFrame:
     """Pooled regression of the settlement value on the corrected sources, refitted for
-    every target day on the days already settled (at least 30 of them)."""
+    every target day on the days already settled (at least ``min_days`` of them)."""
     df = df.copy()
     df[name] = np.nan
     cols = [f"{s}_c" for s in sources] + list(extra)
@@ -231,7 +232,7 @@ def combine(df: pd.DataFrame, sources: list[str], name: str, extra: list[str] = 
         out = np.full(len(g), np.nan)
         for day in np.unique(days):
             train = (days <= day - 2) & ~np.isnan(y)
-            if len(np.unique(days[train])) < 30:
+            if len(np.unique(days[train])) < min_days:
                 continue
             # Regress on differences from the first source so the weights sum to one.
             A = np.column_stack([X[train, 1:] - ref[train, None], np.ones(train.sum())])
@@ -296,7 +297,8 @@ def main() -> None:
     if "ecmwf" in sources:
         feats["blend_ecmwf"] = np.nan
         for i, pattern in enumerate(patterns):
-            feats = combine(feats, pattern + ["ecmwf"], f"_e{i}")
+            # ECMWF was downloaded for a shorter period, so its blend starts on less history.
+            feats = combine(feats, pattern + ["ecmwf"], f"_e{i}", min_days=ECMWF_MIN_DAYS)
             feats["blend_ecmwf"] = feats["blend_ecmwf"].fillna(feats[f"_e{i}"])
     feats = feats.drop(columns=[c for c in feats.columns if c.startswith("_")])
     core = [s for s in main_sources if s not in optional]
@@ -327,6 +329,22 @@ def main() -> None:
     mae = pd.DataFrame(rows)
     print("\nMean absolute error of the settlement value on the market sample (°F); '_c' = bias-corrected:")
     print(mae.round(3).to_string(index=False))
+
+    # How good could any linear combination of these inputs be? Fit station effects and
+    # weights on the test month itself, i.e. with hindsight, and compare with the market.
+    core = [s for s in main_sources if s not in optional]
+    bound_rows = []
+    for label in DECISIONS:
+        t = test[test["decision"] == label].dropna(subset=core + ["market"])
+        X = np.column_stack([pd.get_dummies(t["station"]).to_numpy(float), t[core].to_numpy(float)])
+        beta, *_ = np.linalg.lstsq(X, t["y"].to_numpy(float), rcond=None)
+        bound_rows.append({"decision": label, "city_days": len(t), "sources": "+".join(core),
+                           "hindsight_fit": float(np.abs(X @ beta - t["y"]).mean()),
+                           "market": float((t["market"] - t["y"]).abs().mean())})
+    bound = pd.DataFrame(bound_rows)
+    print("\nHindsight bound: weights and station effects fitted on the test month itself:")
+    print(bound.round(3).to_string(index=False))
+    bound.to_csv(out / "hindsight_bound.csv", index=False)
 
     # Does the best public blend carry information the market price lacks? Same test as
     # success criterion 2, with a normal distribution around the blend whose width is the
