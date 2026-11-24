@@ -12,6 +12,7 @@ import datetime as dt
 import logging
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -70,10 +71,15 @@ def archive_events(
     bucket_seconds: int = 60,
     label: str = "1m",
     pause_s: float = 0.05,
+    workers: int = 4,
 ) -> tuple[int, Path | None]:
-    """Fetch YES-token history for every market of the given events into one Parquet file."""
-    cols: dict[str, list] = {f.name: [] for f in _SCHEMA}
-    n_tokens = 0
+    """Fetch YES-token history for every market of the given events into one Parquet file.
+
+    A few requests run at a time: the endpoint often spends five seconds on a request
+    before answering 503, and waiting for those one after another makes a daily run
+    of a thousand markets take most of an hour.
+    """
+    jobs: list[tuple[str, str, int, int]] = []  # market id, YES token, start, stop
     for event_id in event_ids:
         ev = conn.execute("SELECT start_date, end_date, closed_time FROM events WHERE event_id=?", (event_id,)).fetchone()
         if ev is None or not ev["start_date"]:
@@ -83,23 +89,33 @@ def archive_events(
         stop = int(parse_iso(stop_iso).timestamp()) + 6 * 3600 if stop_iso else int(time.time())
         stop = min(stop, int(time.time()))
         for m in conn.execute("SELECT market_id, yes_token FROM markets WHERE event_id=? AND yes_token IS NOT NULL", (event_id,)):
-            t0 = start
-            while t0 < stop:
-                t1 = min(stop, t0 + MAX_SPAN_S)
-                try:
-                    points = fetch_history(client, m["yes_token"], t0, t1, bucket_seconds)
-                except httpx.HTTPError as e:
-                    log.warning("price history failed for market %s: %s", m["market_id"], e)
-                    points = []
-                for ts, price, res in points:
-                    cols["asset_id"].append(m["yes_token"])
-                    cols["market_id"].append(m["market_id"])
-                    cols["ts"].append(ts)
-                    cols["price"].append(price)
-                    cols["resolution_s"].append(res)
-                t0 = t1
-                time.sleep(pause_s)
-            n_tokens += 1
+            jobs.append((m["market_id"], m["yes_token"], start, stop))
+
+    def fetch(job: tuple[str, str, int, int]) -> list[tuple[int, float, int]]:
+        market_id, token, t0, stop = job
+        points: list[tuple[int, float, int]] = []
+        while t0 < stop:
+            t1 = min(stop, t0 + MAX_SPAN_S)
+            try:
+                points += fetch_history(client, token, t0, t1, bucket_seconds)
+            except httpx.HTTPError as e:
+                log.warning("price history failed for market %s: %s", market_id, e)
+            t0 = t1
+            time.sleep(pause_s)
+        return points
+
+    cols: dict[str, list] = {f.name: [] for f in _SCHEMA}
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for n, (job, points) in enumerate(zip(jobs, pool.map(fetch, jobs)), 1):
+            for ts, price, res in points:
+                cols["asset_id"].append(job[1])
+                cols["market_id"].append(job[0])
+                cols["ts"].append(ts)
+                cols["price"].append(price)
+                cols["resolution_s"].append(res)
+            if n % 100 == 0:
+                log.info("price history: %d of %d tokens, %d points", n, len(jobs), len(cols["ts"]))
+    n_tokens = len(jobs)
     if not cols["ts"]:
         return n_tokens, None
     day = dt.datetime.now(UTC).strftime("%Y-%m-%d")
