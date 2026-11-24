@@ -157,21 +157,28 @@ def prune_local(conn: sqlite3.Connection, settings: Settings, cfg: BucketConfig,
             directory.rmdir()
 
 
+def _packed_copy(conn: sqlite3.Connection, directory: Path) -> Path:
+    """A consistent, gzip-compressed copy of the database, written into ``directory``."""
+    copy = directory / "polyweather.sqlite"
+    target = sqlite3.connect(copy)
+    try:
+        conn.backup(target)  # safe while other processes are writing
+    finally:
+        target.close()
+    packed = directory / "polyweather.sqlite.gz"
+    with open(copy, "rb") as src, gzip.open(packed, "wb", compresslevel=6) as dst:
+        shutil.copyfileobj(src, dst)
+    copy.unlink()
+    return packed
+
+
 def backup_database(conn: sqlite3.Connection, settings: Settings, cfg: BucketConfig, s3, result: OffloadResult, *, force: bool = False) -> None:
     """Upload a consistent, compressed copy of the database, at most once a day."""
     row = conn.execute("SELECT value FROM kv WHERE key='db_backup_ms'").fetchone()
     if not force and row and now_ms() - int(row[0]) < DB_BACKUP_EVERY_MS:
         return
     with tempfile.TemporaryDirectory() as tmp:
-        copy = Path(tmp) / "polyweather.sqlite"
-        target = sqlite3.connect(copy)
-        try:
-            conn.backup(target)  # safe while other processes are writing
-        finally:
-            target.close()
-        packed = Path(tmp) / "polyweather.sqlite.gz"
-        with open(copy, "rb") as src, gzip.open(packed, "wb", compresslevel=6) as dst:
-            shutil.copyfileobj(src, dst)
+        packed = _packed_copy(conn, Path(tmp))
         day = ms_to_iso(now_ms())[:10]
         for name in (f"db/polyweather-{day}.sqlite.gz", "db/polyweather-latest.sqlite.gz"):
             s3.upload_file(str(packed), cfg.bucket, _key(cfg, name))
@@ -180,6 +187,24 @@ def backup_database(conn: sqlite3.Connection, settings: Settings, cfg: BucketCon
         "INSERT INTO kv(key, value) VALUES('db_backup_ms', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (str(now_ms()),),
     )
+
+
+def backup_local(conn: sqlite3.Connection, settings: Settings, *, keep: int = 7) -> Path:
+    """Write today's database copy to ``<data>/backup`` and keep the newest ``keep``.
+
+    The live database must stay on a local disk (SQLite's write-ahead log does not work
+    on shared or network folders), so with Docker it lives in a volume the host cannot
+    browse. This copy is the one to read, move or back up from outside.
+    """
+    settings.backup_dir.mkdir(parents=True, exist_ok=True)
+    day = ms_to_iso(now_ms())[:10]
+    final = settings.backup_dir / f"polyweather-{day}.sqlite.gz"
+    with tempfile.TemporaryDirectory(dir=settings.backup_dir) as tmp:
+        _packed_copy(conn, Path(tmp)).replace(final)
+    copies = sorted(settings.backup_dir.glob("polyweather-*.sqlite.gz"))
+    for old in copies[: max(0, len(copies) - max(1, keep))]:
+        old.unlink()
+    return final
 
 
 def run(conn: sqlite3.Connection, settings: Settings, cfg: BucketConfig, s3=None, *, backup: bool | None = None) -> OffloadResult:

@@ -6,3 +6,8 @@ tests
 deploy
 **/__pycache__
 *.pyc
+.env
+compose.yaml
+scripts
+.github
+*.md

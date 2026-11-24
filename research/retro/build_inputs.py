@@ -10,6 +10,15 @@ Usage:
       --since 2026-10-01 --metar-start 2025-10-20 --nbm-start 2025-10-20 [--stations KLGA,KORD]
 
 Takes roughly 25 minutes for 13 months and 11 stations; every step skips what it already has.
+
+Two sources forget: AWC serves about 30 days of reports and the Data API about 60 days
+of five-minute prices. To rebuild the study's sample after that, use the copies kept in
+data/inputs/:
+
+  --awc-archive data/inputs/awc_metar_<dates>.parquet   load saved AWC reports (with
+                                                        their receipt times) first
+  --keep-prices                                         do not download prices when the
+                                                        price file already exists
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -72,6 +82,18 @@ def fetch_nbm(conn, wanted: set[str], start: dt.date, end: dt.date) -> None:
             conn.execute("COMMIT")
 
 
+def load_awc_archive(conn, path: str) -> int:
+    """Store AWC reports saved earlier by this study (station, time, text, receipt time)."""
+    from polyweather.weather.metar_store import MetarRow, store
+
+    new = 0
+    for batch in pq.ParquetFile(path).iter_batches(batch_size=20_000):
+        rows = [MetarRow(r["station"], parse_iso(r["obs_time"]), r["raw_text"], r["metar_type"], r["receipt_time"])
+                for r in batch.to_pylist()]
+        new += store(conn, rows, "awc_api")
+    return new
+
+
 def fetch_prices(conn, out_path: str, since: str, wanted: set[str]) -> None:
     rows = conn.execute(
         f"""SELECT m.market_id, m.yes_token, e.event_id, e.start_date, e.closed_time, e.end_date
@@ -111,11 +133,15 @@ def main() -> None:
     ap.add_argument("--metar-start", required=True)
     ap.add_argument("--nbm-start", required=True)
     ap.add_argument("--stations", default=",".join(s.icao for s in stations.in_scope("us")))
+    ap.add_argument("--awc-archive", action="append", default=[], help="saved AWC reports to load first (repeatable)")
+    ap.add_argument("--keep-prices", action="store_true", help="skip the price download when the price file exists")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     conn = connect(args.db)
+    for path in args.awc_archive:
+        log.info("awc archive %s: %d new reports", path, load_awc_archive(conn, path))
     wanted = set(args.stations.split(","))
     sts = [stations.get(s) for s in sorted(wanted)]
     today = utcnow().date()
@@ -126,7 +152,10 @@ def main() -> None:
         start = dt.date.fromisoformat(args.metar_start)
         log.info("iem: %d new reports", iem.backfill(conn, client, sts, start, today + dt.timedelta(days=1)))
     fetch_nbm(conn, wanted, dt.date.fromisoformat(args.nbm_start), today + dt.timedelta(days=1))
-    fetch_prices(conn, args.prices, args.since, wanted)
+    if args.keep_prices and os.path.exists(args.prices):
+        log.info("prices: keeping %s", args.prices)
+    else:
+        fetch_prices(conn, args.prices, args.since, wanted)
     from polyweather.ops import settlement_check
 
     s = settlement_check.run(conn, since=args.since, stations=sorted(wanted))

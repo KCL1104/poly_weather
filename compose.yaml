@@ -1,0 +1,49 @@
+# Run the whole system on one computer:
+#
+#   docker compose up -d --build     start (and start again after every reboot)
+#   docker compose logs -f           watch
+#   docker compose exec polyweather polyweather status
+#   docker compose down              stop (data is kept)
+#
+# Optional settings go in a file named .env next to this one; see .env.example.
+name: polyweather
+
+services:
+  polyweather:
+    build: .
+    image: polyweather:local
+    command: ["polyweather", "run-all"]
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 45s  # the recorder writes out what it holds before exiting
+    environment:
+      POLYWEATHER_DATA_DIR: /data
+      POLYWEATHER_SCOPE: ${POLYWEATHER_SCOPE:-us}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    volumes:
+      # Archive files, state and the daily database copy: an ordinary folder on this
+      # computer (./data unless POLYWEATHER_DATA_DIR in .env says otherwise).
+      - type: bind
+        source: ${POLYWEATHER_DATA_DIR:-./data}
+        target: /data
+        bind:
+          create_host_path: true
+      # The live database: a Docker volume. SQLite's write-ahead log is not safe on a
+      # folder shared from Windows or macOS into the container.
+      - type: volume
+        source: db
+        target: /data/db
+    healthcheck:
+      test: ["CMD", "polyweather", "status", "--check"]
+      interval: 1m
+      timeout: 20s
+      retries: 3
+      start_period: 15m  # the first start imports the catalog and recent weather reports
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  db:

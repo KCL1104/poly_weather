@@ -32,7 +32,7 @@ from ..settings import Settings
 from ..storage.parquet_sink import RollingParquetSink
 from ..util.http import make_async_client
 from ..util.timeutil import now_ms
-from .book import BookState, price_key
+from .book import BookState, as_int, price_key
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ SNAPSHOT_EVERY_S = 60.0
 CHECK_EVERY_S = 60.0
 CHECK_SAMPLE = 40
 CHECK_GRACE_S = 15.0
+CHECK_RETRIES = 1  # further looks at a book that differs from a newer snapshot, before resyncing
 UNIVERSE_EVERY_S = 60.0
 GAP_TRIGGER_MS = 60_000  # a book gap longer than this is a pause trigger in the plan
 
@@ -87,6 +88,7 @@ class Stats:
     by_type: dict[str, int] = field(default_factory=dict)
     checks_ok: int = 0
     checks_recovered: int = 0  # hash not seen in the feed, but a second read matched level by level
+    checks_stale_snapshot: int = 0  # the exchange's snapshot was older than the feed: local book kept
     checks_mismatch: int = 0
     disconnects: int = 0
 
@@ -112,7 +114,7 @@ class Recorder:
         self._seq = 0
         self._open_gap: dict[int, int] = {}  # conn id -> gaps row id
         self._last_ok_check: dict[str, int] = {}
-        self._pending_checks: dict[str, tuple[str, int]] = {}  # asset -> (rest hash, deadline ms)
+        self._pending_checks: dict[str, tuple[str, int, int]] = {}  # asset -> (rest hash, deadline ms, looks so far)
         self._state_path = settings.state_dir / "recorder.json"
         self._stopping = False
 
@@ -192,10 +194,16 @@ class Recorder:
         self.snaps.flush()
 
     async def _check_books(self, client) -> None:
+        """Compare a sample of books with the exchange's REST snapshots.
+
+        A snapshot whose hash the feed has carried is a match. One it has not carried
+        is looked at again after a grace period, because the snapshot may simply be
+        ahead of the feed. What happens then is decided in ``_confirm_mismatches``.
+        """
         now = now_ms()
         # First settle the checks left pending by the previous round.
-        expired: list[tuple[str, str]] = []
-        for asset, (rest_hash, deadline) in list(self._pending_checks.items()):
+        expired: list[tuple[str, str, int]] = []
+        for asset, (rest_hash, deadline, looks) in list(self._pending_checks.items()):
             book = self.state.books.get(asset)
             if book is None:
                 del self._pending_checks[asset]
@@ -205,7 +213,7 @@ class Recorder:
                 self.stats.checks_ok += 1
             elif now >= deadline:
                 del self._pending_checks[asset]
-                expired.append((asset, rest_hash))
+                expired.append((asset, rest_hash, looks))
         if expired:
             await self._confirm_mismatches(client, expired, now)
         assets = [a for a in self.state.books if a not in self._pending_checks]
@@ -226,33 +234,54 @@ class Recorder:
                 self._last_ok_check[asset] = now
                 self.stats.checks_ok += 1
             else:
-                self._pending_checks[asset] = (rest_hash, now + int(CHECK_GRACE_S * 1000))
+                self._pending_checks[asset] = (rest_hash, now + int(CHECK_GRACE_S * 1000), 0)
 
-    async def _confirm_mismatches(self, client, expired: list[tuple[str, str]], now: int) -> None:
-        """A REST hash that never showed up in the feed is only a suspicion: the REST
-        read may simply have been older than the hash history. Read those books again
-        and compare price levels directly; only a book whose levels differ is resynced."""
+    async def _confirm_mismatches(self, client, expired: list[tuple[str, str, int]], now: int) -> None:
+        """Decide about snapshots whose hash never showed up in the feed.
+
+        Read those books again and compare price levels directly. Three outcomes:
+
+        * the levels match (or the new hash is known): nothing was wrong;
+        * the levels differ and the snapshot is not newer than the last change applied
+          from the feed: the snapshot is the stale side. The exchange's snapshots lag
+          one change behind when two changes land in the same instant (seen on
+          2026-11-24: the snapshot showed the state between two simultaneous
+          cancellations, with a timestamp before theirs, until the next change). The
+          feed-built book is kept; replacing it would install the stale state;
+        * the levels differ and the snapshot is newer: the feed missed something. After
+          one more look, to rule out a snapshot that is merely ahead, the book is
+          resynced and the interval logged as a gap.
+        """
         try:
-            fresh = {b.get("asset_id"): b for b in await clob.get_books(client, [a for a, _ in expired])}
+            fresh = {b.get("asset_id"): b for b in await clob.get_books(client, [a for a, _, _ in expired])}
         except Exception as e:  # noqa: BLE001
             log.warning("REST book re-check failed: %s", e)
-            fresh = {}
-        for asset, first_hash in expired:
+            return  # no second reading, no verdict
+        for asset, first_hash, looks in expired:
             book = self.state.books.get(asset)
             rest = fresh.get(asset)
-            if book is None:
+            if book is None or rest is None:
                 continue
-            if rest is not None and (rest.get("hash") in book.hashes or _same_levels(book, rest)):
+            if rest.get("hash") in book.hashes or _same_levels(book, rest):
                 self._last_ok_check[asset] = now
                 self.stats.checks_ok += 1
                 self.stats.checks_recovered += 1
-            else:
-                self._mismatch(asset, (rest or {}).get("hash") or first_hash, now)
+                continue
+            rest_ts = as_int(rest.get("timestamp"))
+            if rest_ts is not None and book.exch_ts_ms is not None and rest_ts <= book.exch_ts_ms:
+                self.stats.checks_stale_snapshot += 1
+                log.info("stale exchange snapshot for %s (snapshot %d, feed %d): keeping the feed-built book",
+                         asset[:16], rest_ts, book.exch_ts_ms)
+                continue
+            if looks < CHECK_RETRIES and rest.get("hash"):
+                self._pending_checks[asset] = (rest["hash"], now + int(CHECK_GRACE_S * 1000), looks + 1)
+                continue
+            self._mismatch(asset, rest.get("hash") or first_hash, now)
 
     def _mismatch(self, asset: str, rest_hash: str, now: int) -> None:
         self.stats.checks_mismatch += 1
         start = self._last_ok_check.get(asset) or now - int(CHECK_EVERY_S * 1000)
-        log.warning("book hash mismatch for %s: REST hash %s never seen in feed; resyncing", asset[:16], rest_hash)
+        log.warning("book mismatch for %s: newer REST snapshot %s differs from the feed-built book; resyncing", asset[:16], rest_hash)
         self.db.execute(
             "INSERT INTO gaps(source, key, start_ms, end_ms, reason) VALUES('book', ?, ?, ?, 'hash_mismatch')",
             (f"asset:{asset}", start, now),
@@ -265,13 +294,13 @@ class Recorder:
     def _heartbeat(self) -> None:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"last_alive_ms": now_ms(), "frames": self.stats.frames}))
+        tmp.write_text(json.dumps({"last_alive_ms": now_ms(), "frames": self.stats.frames}), encoding="utf-8")
         tmp.replace(self._state_path)
 
     def _restart_gap(self) -> None:
         """Log the outage between the previous run's last heartbeat and now."""
         try:
-            last = json.loads(self._state_path.read_text())["last_alive_ms"]
+            last = json.loads(self._state_path.read_text(encoding="utf-8"))["last_alive_ms"]
         except (OSError, ValueError, KeyError):
             return
         self.db.execute(
@@ -304,10 +333,10 @@ class Recorder:
                         next_check = now + CHECK_EVERY_S
                     if now >= next_log:
                         log.info(
-                            "recorder: %d frames, %d books, raw %.1f MB, checks ok/recovered/mismatch %d/%d/%d, disconnects %d",
+                            "recorder: %d frames, %d books, raw %.1f MB, checks ok/recovered/stale snapshot/mismatch %d/%d/%d/%d, disconnects %d",
                             self.stats.frames, len(self.state.books), self.raw.bytes_written / 1e6,
-                            self.stats.checks_ok, self.stats.checks_recovered, self.stats.checks_mismatch,
-                            self.stats.disconnects,
+                            self.stats.checks_ok, self.stats.checks_recovered, self.stats.checks_stale_snapshot,
+                            self.stats.checks_mismatch, self.stats.disconnects,
                         )
                         next_log = now + 300
                     self.raw.maybe_flush(now_ms())

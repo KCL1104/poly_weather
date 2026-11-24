@@ -46,7 +46,7 @@ class Book:
         self.market = msg.get("market") or self.market
         self.bids = {price_key(l["price"]): float(l["size"]) for l in msg.get("bids") or []}
         self.asks = {price_key(l["price"]): float(l["size"]) for l in msg.get("asks") or []}
-        self.exch_ts_ms = _int(msg.get("timestamp"))
+        self.exch_ts_ms = as_int(msg.get("timestamp"))
         self.recv_ms = recv_ms
         self.n_updates += 1
         self._note_hash(msg.get("hash"), recv_ms)
@@ -79,7 +79,7 @@ class Book:
         return bids, asks
 
 
-def _int(x) -> int | None:
+def as_int(x) -> int | None:
     try:
         return int(x)
     except (TypeError, ValueError):
@@ -100,7 +100,7 @@ class BookState:
             if asset:
                 self.books.setdefault(asset, Book(asset)).apply_snapshot(msg, recv_ms)
         elif et == "price_change":
-            ts = _int(msg.get("timestamp"))
+            ts = as_int(msg.get("timestamp"))
             for change in msg.get("price_changes") or []:
                 book = self.books.get(change.get("asset_id"))
                 if book is not None:  # no snapshot yet: the change cannot be placed

@@ -1,7 +1,9 @@
 """Runtime settings, read from environment variables.
 
 POLYWEATHER_DATA_DIR   where everything is stored (default: the attached Railway volume
-                       when there is one, else ./data)
+                       when there is one, else ./data): db/ the SQLite database, raw/ the
+                       Parquet archive, state/ small run-time files, backup/ daily
+                       database copies
 POLYWEATHER_SCOPE      "us" (default) or "all": which stations the recorder and
                        archivers cover
 POLYWEATHER_USER_AGENT User-Agent sent to public APIs
@@ -31,6 +33,10 @@ class Settings:
     @property
     def state_dir(self) -> Path:
         return self.data_dir / "state"
+
+    @property
+    def backup_dir(self) -> Path:
+        return self.data_dir / "backup"
 
     def ensure_dirs(self) -> None:
         for p in (self.db_path.parent, self.raw_dir, self.state_dir):

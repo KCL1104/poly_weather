@@ -4,10 +4,12 @@
 METAR poller) and runs every periodic job on its schedule, each as a child process
 running the same CLI command a systemd unit would run. A collector that exits is
 restarted with backoff; a job that is still running when it comes due again is
-skipped. SIGTERM (what a redeploy sends) is passed on so the recorder can flush.
+skipped. A stop request (SIGTERM from Docker or a redeploy, Ctrl+C in a terminal) is
+passed on so the recorder can flush.
 
-This exists because platforms such as Railway give a service one container and one
-volume, and a scheduled ("cron") service cannot share that volume.
+This is the way to run on a home computer (any operating system, with or without
+Docker) and on platforms such as Railway, which give a service one container and one
+volume and whose scheduled ("cron") services cannot share that volume.
 """
 
 from __future__ import annotations
@@ -16,7 +18,6 @@ import datetime as dt
 import json
 import logging
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from ..settings import Settings
+from ..util.stop import ask_to_stop, on_stop, spawn_options
 from ..util.timeutil import UTC
 from . import offload
 
@@ -74,7 +76,9 @@ def default_jobs(bucket_configured: bool, ensemble_source: str = "openmeteo") ->
         Job("check-gaps", ["check", "gaps"], daily_utc=("00:30",)),
     ]
     if bucket_configured:
-        jobs.append(Job("offload", ["offload"], every_s=900, offset_s=60))
+        jobs.append(Job("offload", ["offload"], every_s=900, offset_s=60))  # also backs up the database
+    else:
+        jobs.append(Job("backup", ["backup"], daily_utc=("00:50",)))
     return jobs
 
 
@@ -93,7 +97,7 @@ class Supervisor:
     # ---- helpers ---------------------------------------------------------------
 
     def _spawn(self, args: list[str]) -> subprocess.Popen:
-        return subprocess.Popen(self.command + args)
+        return subprocess.Popen(self.command + args, **spawn_options())
 
     def alert(self, text: str) -> None:
         log.error("ALERT: %s", text)
@@ -165,7 +169,7 @@ class Supervisor:
         children = [p for p in [s.process for s in self.services] + [j.process for j in self.jobs] if p is not None]
         for p in children:
             if p.poll() is None:
-                p.send_signal(signal.SIGTERM)
+                ask_to_stop(p)
         deadline = time.monotonic() + grace_s
         for p in children:
             try:
@@ -174,8 +178,7 @@ class Supervisor:
                 p.kill()
 
     def run(self, duration_s: float | None = None) -> None:
-        signal.signal(signal.SIGTERM, self.stop)
-        signal.signal(signal.SIGINT, self.stop)
+        on_stop(self.stop)
         started = time.monotonic()
         try:
             while not self.stopping:

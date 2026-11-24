@@ -1,5 +1,7 @@
 # 部署到 Railway
 
+> 狀態（2026-11-24）：沒有部署。Railway 專案 `poly-weather` 已建立，下面的服務、磁碟、Bucket 和變數都停在「待套用」，套用前不會啟動也不會計費。目前改在家用電腦跑，見 [`HOME.md`](HOME.md)。
+
 Railway 沒有 systemd，一個服務只能掛一顆磁碟，排程服務也不能共用磁碟。所以在 Railway 上整套系統跑在**一個服務、一個容器**裡：
 
 ```
@@ -80,6 +82,6 @@ polyweather offload --backup                  # 立刻上傳並備份資料庫
 
 ## 還沒驗證的
 
-- Docker 映像沒有在本機建過（開發環境沒有 Docker daemon）；只驗證過相同的安裝步驟在乾淨環境可以完成。
+- 映像已經實際建過，也用 `compose.yaml` 跑過（2026-11-24，見 [`HOME.md`](HOME.md)），但沒有在 Railway 上建過。
 - 上傳只用模擬的 S3 測過，還沒對真的 Railway Bucket 跑過。上線後先看 `offload` 那一行日誌：`uploaded` 大於 0 才算通。
 - `run-all` 在本機實跑過約 3 分鐘：首次啟動流程、兩個常駐程序、定時工作和收尾都正常。

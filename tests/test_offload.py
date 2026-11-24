@@ -174,3 +174,27 @@ def test_url_style_falls_back_to_virtual_when_nothing_answers(monkeypatch, setti
     made = []
     client = offload.make_s3_client(None, BUCKET, factory=_factory(set(), made))
     assert client.style == "virtual"
+
+
+def test_local_backup_is_a_readable_copy_and_old_ones_are_dropped(settings):
+    from polyweather.storage import db
+
+    conn = db.connect(settings.db_path)
+    conn.execute("INSERT INTO kv(key, value) VALUES('probe', 'kept')")
+    for day in ("2026-11-01", "2026-11-02", "2026-11-03"):
+        (settings.backup_dir).mkdir(exist_ok=True)
+        (settings.backup_dir / f"polyweather-{day}.sqlite.gz").write_bytes(b"old")
+
+    path = offload.backup_local(conn, settings, keep=2)
+    names = sorted(p.name for p in settings.backup_dir.iterdir())
+    assert names == ["polyweather-2026-11-03.sqlite.gz", path.name]  # newest two, no leftovers
+
+    restored = settings.data_dir / "restored.sqlite"
+    restored.write_bytes(gzip.decompress(path.read_bytes()))
+    copy = sqlite3.connect(restored)
+    assert copy.execute("SELECT value FROM kv WHERE key='probe'").fetchone()[0] == "kept"
+    assert copy.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    copy.close()
+
+    again = offload.backup_local(conn, settings, keep=2)  # same day: replaced, not duplicated
+    assert again == path and len(list(settings.backup_dir.iterdir())) == 2

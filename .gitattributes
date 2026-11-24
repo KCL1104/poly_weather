@@ -1,0 +1,7 @@
+# Same line endings on every operating system: scripts and rule templates must not
+# pick up Windows line endings when the repository is checked out there.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.parquet binary
+*.gz binary
+*.sqlite binary

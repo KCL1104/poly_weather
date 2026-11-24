@@ -180,4 +180,23 @@ python h2a_window.py retro.sqlite prices_1m.parquet --fetch
 | `criterion2.csv`、`h1_mid_price_bound.csv`、`price_calibration.csv`、`h3_mid_price_bound.csv` | 第二部分的表 |
 | `h2a_window.csv` | H2a 事前檢查的表 |
 
-AWC 只保留約 30 天，Data API 的 5 分鐘價格約 60 天，所以之後重跑 `build_inputs.py` 拿到的市場樣本會往後移，數字不會和這裡完全相同。
+AWC 只保留約 30 天，Data API 的 5 分鐘價格約 60 天、1 分鐘價格約 7 天，所以之後重跑 `build_inputs.py` 拿到的市場樣本會往後移，數字不會和這裡完全相同。
+
+要在這些來源過期之後重建同一批樣本，用 `data/inputs/` 裡留下來的三個檔：
+
+| 檔案 | 內容 |
+| --- | --- |
+| `awc_metar_2026-10-25_2026-11-24.parquet` | AWC 的 53,926 則報文（48 站），含 AWC 的收報時間。IEM 的存檔沒有收報時間 |
+| `prices_5m_us_2026-10-21_2026-11-24.parquet` | 美國 11 站已結算盤的 5 分鐘價格，7,260 個盤 |
+| `prices_1m_us_high_2026-11-16_2026-11-24.parquet` | 美國最高溫盤的 1 分鐘價格，968 個盤，H2a 檢查用 |
+
+```bash
+cp data/inputs/prices_5m_us_2026-10-21_2026-11-24.parquet prices_5m_us.parquet
+python build_inputs.py retro.sqlite prices_5m_us.parquet \
+    --since 2026-10-01 --metar-start 2025-10-20 --nbm-start 2025-10-20 \
+    --awc-archive data/inputs/awc_metar_2026-10-25_2026-11-24.parquet --keep-prices
+python market_tests.py retro.sqlite prices_5m_us.parquet
+python h2a_window.py retro.sqlite data/inputs/prices_1m_us_high_2026-11-16_2026-11-24.parquet --since 2026-11-17
+```
+
+盤口目錄（Gamma 的已結算事件）、IEM 的 METAR 和 NBM 公報都還是從來源重新下載，這三個來源沒有保存期限。

@@ -127,18 +127,19 @@ async def test_recorder_lands_frames_marks_gaps_and_replays(recorder, conn, tmp_
     assert len(replay.list_markets()) == 11
 
 
-async def test_recorder_flags_a_book_that_diverged_from_rest(recorder, conn, monkeypatch):
+async def test_recorder_resyncs_a_book_that_differs_from_a_newer_snapshot(recorder, conn, monkeypatch):
     from polyweather.polymarket import clob
     from polyweather.recorder import recorder as rec_mod
 
     recorder._sync_universe()
     fc = FakeConnection.instances[0]
     asset = sorted(fc.assets)[0]
-    fc.on_frame(1_795_500_000_000, 1, json.dumps([book(asset, [("0.40", "100")], [("0.45", "30")], h="seen")]))
+    fc.on_frame(1_795_500_000_000, 1, json.dumps([book(asset, [("0.40", "100")], [("0.45", "30")], h="seen", ts="1000")]))
 
     async def rest_books(client, ids):
-        # REST shows a bid the feed never delivered: a real divergence.
-        return [{"asset_id": a, "hash": rest_hash[0], "bids": [{"price": "0.43", "size": "9"}], "asks": []} for a in ids]
+        # A bid the feed never delivered, in a snapshot newer than the feed's last change.
+        return [{"asset_id": a, "hash": rest_hash[0], "timestamp": "5000",
+                 "bids": [{"price": "0.43", "size": "9"}], "asks": []} for a in ids]
 
     monkeypatch.setattr(clob, "get_books", rest_books)
     monkeypatch.setattr(rec_mod, "CHECK_GRACE_S", 0.0)
@@ -150,11 +151,66 @@ async def test_recorder_flags_a_book_that_diverged_from_rest(recorder, conn, mon
     rest_hash[0] = "never-in-feed"
     await recorder._check_books(None)  # goes pending
     assert recorder.stats.checks_mismatch == 0 and asset in recorder._pending_checks
-    await recorder._check_books(None)  # grace elapsed, still unseen: mismatch
-    assert recorder.stats.checks_mismatch == 1
+    await recorder._check_books(None)  # second look differs too: one more chance for the feed to catch up
+    assert recorder.stats.checks_mismatch == 0 and asset in recorder._pending_checks
+    await recorder._check_books(None)  # still different: the feed missed something
+    assert recorder.stats.checks_mismatch == 1 and recorder.stats.checks_stale_snapshot == 0
     assert fc.resynced == [asset] and asset not in recorder.state.books
     row = conn.execute("SELECT key, reason FROM gaps WHERE reason='hash_mismatch'").fetchone()
     assert row["key"] == f"asset:{asset}"
+
+
+async def test_a_stale_exchange_snapshot_does_not_replace_the_feed_built_book(recorder, conn, monkeypatch):
+    """What the exchange did on 2026-11-24: two cancellations in the same instant, and a
+    snapshot stuck between them with a timestamp just before theirs."""
+    from polyweather.polymarket import clob
+    from polyweather.recorder import recorder as rec_mod
+
+    recorder._sync_universe()
+    fc = FakeConnection.instances[0]
+    asset = sorted(fc.assets)[0]
+    fc.on_frame(1, 1, json.dumps([book(asset, [("0.05", "372"), ("0.07", "372")], [], h="before", ts="1795533020000")]))
+    batch = {"event_type": "price_change", "market": "0xm", "timestamp": "1795533025005", "price_changes": [
+        {"asset_id": asset, "price": "0.05", "size": "186", "side": "BUY", "hash": "after-both"},
+        {"asset_id": asset, "price": "0.07", "size": "186", "side": "BUY", "hash": "after-both"}]}
+    fc.on_frame(2, 1, json.dumps(batch))
+
+    async def rest_books(client, ids):
+        return [{"asset_id": a, "hash": "between-the-two", "timestamp": "1795533025000",
+                 "bids": [{"price": "0.05", "size": "186"}, {"price": "0.07", "size": "372"}], "asks": []} for a in ids]
+
+    monkeypatch.setattr(clob, "get_books", rest_books)
+    monkeypatch.setattr(rec_mod, "CHECK_GRACE_S", 0.0)
+    for _ in range(4):
+        await recorder._check_books(None)
+
+    assert recorder.stats.checks_stale_snapshot >= 1 and recorder.stats.checks_mismatch == 0
+    assert fc.resynced == [] and recorder.state.books[asset].bids == {price_key("0.05"): 186.0, price_key("0.07"): 186.0}
+    assert conn.execute("SELECT COUNT(*) FROM gaps").fetchone()[0] == 0
+
+
+async def test_a_failed_second_read_gives_no_verdict(recorder, conn, monkeypatch):
+    from polyweather.polymarket import clob
+    from polyweather.recorder import recorder as rec_mod
+
+    recorder._sync_universe()
+    fc = FakeConnection.instances[0]
+    asset = sorted(fc.assets)[0]
+    fc.on_frame(1, 1, json.dumps([book(asset, [("0.40", "100")], [("0.45", "30")], h="seen")]))
+    calls = []
+
+    async def rest_books(client, ids):
+        calls.append(list(ids))
+        if len(calls) == 2:  # the re-check of the pending book
+            raise RuntimeError("exchange unavailable")
+        return [{"asset_id": a, "hash": "never-in-feed", "timestamp": "5000", "bids": [], "asks": []} for a in ids]
+
+    monkeypatch.setattr(clob, "get_books", rest_books)
+    monkeypatch.setattr(rec_mod, "CHECK_GRACE_S", 0.0)
+    await recorder._check_books(None)  # pending
+    await recorder._check_books(None)  # the second read fails
+    assert recorder.stats.checks_mismatch == 0 and fc.resynced == [] and asset in recorder.state.books
+    assert conn.execute("SELECT COUNT(*) FROM gaps").fetchone()[0] == 0
 
 
 async def test_pending_check_clears_when_the_hash_arrives(recorder, monkeypatch):

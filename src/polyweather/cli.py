@@ -12,14 +12,14 @@ import asyncio
 import datetime as dt
 import json
 import logging
-import signal
 import sys
 
 from . import stations as station_registry
 from .settings import Settings, load_settings
 from .storage import db
 from .util.http import make_client
-from .util.timeutil import iso, ms_to_iso, utcnow
+from .util.stop import on_stop
+from .util.timeutil import iso, ms_to_iso, now_ms, utcnow
 
 log = logging.getLogger("polyweather")
 
@@ -75,15 +75,13 @@ def cmd_record(args, settings, conn) -> int:
     rec = Recorder(settings, conn)
 
     async def main():
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, rec.stop)
+        on_stop(rec.stop, asyncio.get_running_loop())
         return await rec.run(args.duration)
 
     stats = asyncio.run(main())
     print(json.dumps({"frames": stats.frames, "messages": stats.messages, "by_type": stats.by_type,
                       "checks_ok": stats.checks_ok, "checks_recovered": stats.checks_recovered,
-                      "checks_mismatch": stats.checks_mismatch,
+                      "checks_stale_snapshot": stats.checks_stale_snapshot, "checks_mismatch": stats.checks_mismatch,
                       "disconnects": stats.disconnects, "raw_bytes": rec.raw.bytes_written,
                       "snapshot_bytes": rec.snaps.bytes_written}))
     return 0
@@ -217,6 +215,16 @@ def cmd_offload(args, settings, conn) -> int:
     return _job(conn, "offload", run)
 
 
+def cmd_backup(args, settings, conn) -> int:
+    from .ops import offload
+
+    def run():
+        path = offload.backup_local(conn, settings, keep=args.keep)
+        return {"backup": str(path), "bytes": path.stat().st_size, "disk": offload.disk_usage(settings)}
+
+    return _job(conn, "backup", run)
+
+
 def cmd_run_all(args, settings, conn) -> int:
     from .ops import offload, supervisor
 
@@ -261,11 +269,33 @@ def cmd_station(args, settings, conn) -> int:
     return 0
 
 
+HEARTBEAT_STALE_S = 180  # the recorder writes its heartbeat every second
+
+
+def _recorder_heartbeat_age_s(settings: Settings) -> float | None:
+    try:
+        state = json.loads((settings.state_dir / "recorder.json").read_text(encoding="utf-8"))
+        return round((now_ms() - state["last_alive_ms"]) / 1000, 1)
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def cmd_status(args, settings, conn) -> int:
+    from .ops import offload
+
     q = lambda sql, *a: conn.execute(sql, a).fetchone()[0]  # noqa: E731
+    age = _recorder_heartbeat_age_s(settings)
+    alive = age is not None and age <= HEARTBEAT_STALE_S
+    if args.check:  # exit status only: used as the container health check
+        return 0 if alive else 1
+    last_metar = q("SELECT MAX(first_seen_ms) FROM metar_obs")
     out = {
         "data_dir": str(settings.data_dir),
         "scope": settings.scope,
+        "recorder_running": alive,
+        "recorder_heartbeat_age_s": age,
+        "last_new_metar_min_ago": round((now_ms() - last_metar) / 60000, 1) if last_metar else None,
+        "disk": offload.disk_usage(settings),
         "events_open": q("SELECT COUNT(*) FROM events WHERE closed=0"),
         "events_closed": q("SELECT COUNT(*) FROM events WHERE closed=1"),
         "specs_ok": q("SELECT COUNT(*) FROM resolution_specs WHERE status='ok'"),
@@ -346,6 +376,10 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--backup", action="store_true", help="also upload a database backup now")
     c.set_defaults(fn=cmd_offload)
 
+    c = sub.add_parser("backup", help="write a consistent, compressed copy of the database under <data>/backup")
+    c.add_argument("--keep", type=int, default=7, help="how many daily copies to keep (default 7)")
+    c.set_defaults(fn=cmd_backup)
+
     c = sub.add_parser("run-all", help="run collectors and all scheduled jobs in one process tree (no systemd)")
     c.add_argument("--duration", type=float, default=None, help="stop after N seconds (for testing)")
     c.add_argument("--ensemble-source", choices=["openmeteo", "ecmwf_open"], default="openmeteo")
@@ -359,6 +393,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.set_defaults(fn=cmd_station)
 
     c = sub.add_parser("status", help="one-screen summary of the archive")
+    c.add_argument("--check", action="store_true", help="print nothing; exit 1 unless the recorder is running")
     c.set_defaults(fn=cmd_status)
     return p
 

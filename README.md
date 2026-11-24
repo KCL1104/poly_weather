@@ -19,7 +19,8 @@ Polymarket 每日氣溫盤的紙上交易研究系統。只讀公開資料、只
 | 價格歷史存檔 | 交易所的 1 分鐘價格序列，紀錄器有缺口時的備援 | `polyweather prices archive` |
 | 結算值比對 | 依規則從 METAR 重建結算值，和實際結算比對；不一致就凍結測站 | `polyweather check settlement` |
 | 每日缺口檢查 | 各存檔前一天是否齊全；連續 7 天全過是第一道關卡 | `polyweather check gaps`、`check streak` |
-| 單一行程模式 | 沒有 systemd 的平台用：一個指令跑兩個常駐程序和全部定時工作 | `polyweather run-all` |
+| 單一行程模式 | 家用電腦、容器等沒有 systemd 的環境用：一個指令跑兩個常駐程序和全部定時工作 | `polyweather run-all` |
+| 資料庫備份 | 每天把資料庫完整複製一份、壓縮後放 `backup/`，保留 7 份 | `polyweather backup` |
 | Bucket 上傳 | 寫完的原始檔上傳 S3 相容的 Bucket，過期的本機副本刪除，每天備份資料庫 | `polyweather offload` |
 | M0 機率分布 | NBP 五個百分位數轉成連續分布，再積分到各區間 | `polyweather.models.m0` |
 
@@ -75,10 +76,13 @@ polyweather status
 
 ## 部署
 
-兩種方式，擇一：
+三種方式，擇一：
 
+- **家用電腦**（Windows、macOS、Linux；Docker 或直接跑）：見 [`deploy/HOME.md`](deploy/HOME.md)。最短的路是 `docker compose up -d --build`。
 - **Railway**（單一容器，原始資料放 Bucket）：見 [`deploy/RAILWAY.md`](deploy/RAILWAY.md)。
 - **自己的 Ubuntu 主機**（systemd）：見下一節。
+
+前兩種跑的都是 `polyweather run-all`：一個指令啟動兩個常駐程序，並按時間表跑其餘的工作。
 
 ### Ubuntu + systemd
 
@@ -114,7 +118,9 @@ sudo ./deploy/install.sh
 | 原始訊息 Parquet（zstd） | 4 分鐘 5.5 MB，壓縮比約 10 倍 | 每天約 2 GB |
 | 60 秒快照 | 每份約 190 KB | 每天約 270 MB |
 
-13 週大約 200 GB，美國白天交易活躍時會更高。建議先配 300 GB 以上的磁碟，第一週看實際用量再決定要不要調整。原始訊息裡佔空間的主要是每筆更新附的雜湊，壓不下去。
+同一天 15:09 到 15:34 UTC（美東上午）再量一次：每秒 550 到 700 則，原始訊息換算每天 2.6 到 3.2 GB，快照每天 0.3 GB。
+
+合起來每天約 2.3 到 3.5 GB，13 週約 210 到 320 GB；還沒量過美東下午到收盤的時段，估計時把上限放到每天 5 GB。建議先配 300 GB 以上的磁碟，第一週看實際用量再決定要不要調整。原始訊息裡佔空間的主要是每筆更新附的雜湊，壓不下去。
 
 `POLYWEATHER_SCOPE=all` 會把 48 個測站全部納入，量大約是 4 到 5 倍。
 
@@ -135,6 +141,16 @@ sudo ./deploy/install.sh
 - ECMWF 直讀沒有排進預設排程。排程單元的逾時是 15 分鐘，改用它之前要先調長。
 - 回補一年的歷史成員（每天兩輪）約要 620 GB、連續下載一週左右。可行，但不是順手就能做的事。
 
+## 交易所快照會落後一筆
+
+2026-11-24 實跑時發現：同一個瞬間有兩筆變動（例如兩張掛單同時到期撤銷）時，交易所的訂單簿快照有時停在兩筆之間的狀態，時間戳記比那兩筆變動早 1 到 5 毫秒，要等這本簿子下一次變動才更新。REST 的 `/book` 和 WebSocket 訂閱時送來的 `book` 訊息都一樣。即時串流的 `price_change` 才是對的：查過的三個例子裡，同一價位之後的變動都和串流累計出來的數量吻合，和快照的數量不吻合。
+
+對系統的影響：
+
+- **紀錄器的抽查**：快照和本機的簿子對不上時，先看快照的時間戳記。快照不比串流最後一筆變動新，就判定是快照過期，保留本機的簿子，記在 `checks_stale_snapshot`。快照比較新才算串流漏訊息，重新訂閱並記 gap。修正前的做法會把對的簿子換成過期的快照。
+- **重播與研究**：訂單簿要從 `raw/book` 的串流重建。剛連線時拿到的快照可能有少數幾本落後一筆，要到該價位下一次變動才會對。
+- **頻率**：每分鐘抽查 40 本，19 分鐘內遇到 3 次。
+
 ## 資料放哪裡
 
 ```
@@ -146,7 +162,10 @@ $POLYWEATHER_DATA_DIR/
   raw/ens/source=.../date=.../ 集成預報成員
   raw/prices_history/date=.../ 交易所價格序列
   state/recorder.json          紀錄器心跳，用來在重啟時補記 gap
+  backup/                      資料庫的每日備份（`run-all` 沒接 Bucket 時），保留 7 份
 ```
+
+用 Docker Compose 跑時，`db/` 在 Docker 的磁碟區裡，主機上看得到的資料庫是 `backup/` 那一份，原因見 [`deploy/HOME.md`](deploy/HOME.md)。
 
 ## 凍結與解凍
 

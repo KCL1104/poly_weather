@@ -29,10 +29,12 @@ def test_job_slots_change_exactly_when_due():
 
 
 def test_default_jobs_add_offload_only_with_a_bucket():
-    assert "offload" not in [j.name for j in supervisor.default_jobs(False)]
+    local = {j.name: j for j in supervisor.default_jobs(False)}
+    assert "offload" not in local and local["backup"].daily_utc == ("00:50",)
     jobs = {j.name: j for j in supervisor.default_jobs(True, ensemble_source="ecmwf_open")}
     assert jobs["offload"].every_s == 900 and jobs["ensemble"].args[-1] == "ecmwf_open"
     assert jobs["check-gaps"].daily_utc == ("00:30",)
+    assert "backup" not in jobs  # the bucket upload already includes the database
 
 
 @pytest.fixture
