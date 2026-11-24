@@ -1,0 +1,484 @@
+# Station registry. One table per ICAO station that a Polymarket daily temperature
+# market resolves on. `tz` is the IANA zone used for the "station local date" rule;
+# it is cross-checked against every market's resolution window when rules are parsed.
+# `us = true` marks stations covered by NOAA NBM/LAMP station guidance.
+
+[CYYZ]
+city = "toronto"
+tz = "America/Toronto"
+lat = 43.679
+lon = -79.629
+elev_m = 171
+name = "Toronto/Pearson Intl"
+country = "CA"
+us = false
+
+[EDDM]
+city = "munich"
+tz = "Europe/Berlin"
+lat = 48.348
+lon = 11.813
+elev_m = 445
+name = "Munich Intl"
+country = "DE"
+us = false
+
+[EFHK]
+city = "helsinki"
+tz = "Europe/Helsinki"
+lat = 60.327
+lon = 24.957
+elev_m = 56
+name = "Helsinki/Vantaa Arpt"
+country = "FI"
+us = false
+
+[EGLC]
+city = "london"
+tz = "Europe/London"
+lat = 51.505
+lon = 0.055
+elev_m = 10
+name = "London City Arpt"
+country = "GB"
+us = false
+
+[EHAM]
+city = "amsterdam"
+tz = "Europe/Amsterdam"
+lat = 52.315
+lon = 4.79
+elev_m = -2
+name = "Amsterdam/Schiphol Arpt"
+country = "NL"
+us = false
+
+[EPWA]
+city = "warsaw"
+tz = "Europe/Warsaw"
+lat = 52.163
+lon = 20.961
+elev_m = 107
+name = "Warsaw/Chopin Arpt"
+country = "PL"
+us = false
+
+[FACT]
+city = "cape-town"
+tz = "Africa/Johannesburg"
+lat = -33.965
+lon = 18.602
+elev_m = 48
+name = "Capetown Intl"
+country = "ZA"
+us = false
+
+[KATL]
+city = "atlanta"
+tz = "America/New_York"
+lat = 33.62972
+lon = -84.44223
+elev_m = 309
+name = "Atlanta/Hartsfield-Jackson Intl"
+country = "US"
+us = true
+
+[KAUS]
+city = "austin"
+tz = "America/Chicago"
+lat = 30.1831
+lon = -97.68063
+elev_m = 148
+name = "Austin/Bergstrom Intl"
+country = "US"
+us = true
+
+[KDAL]
+city = "dallas"
+tz = "America/Chicago"
+lat = 32.83836
+lon = -96.83584
+elev_m = 148
+name = "Dallas/Love Fld"
+country = "US"
+us = true
+
+[KDEN]
+city = "denver"
+tz = "America/Denver"
+lat = 39.84657
+lon = -104.65623
+elev_m = 1656
+name = "Denver Intl"
+country = "US"
+us = true
+
+[KHOU]
+city = "houston"
+tz = "America/Chicago"
+lat = 29.64582
+lon = -95.28214
+elev_m = 13
+name = "Houston/Hobby Arpt"
+country = "US"
+us = true
+
+[KLAX]
+city = "los-angeles"
+tz = "America/Los_Angeles"
+lat = 33.93817
+lon = -118.3866
+elev_m = 30
+name = "Los Angeles Intl"
+country = "US"
+us = true
+
+[KLGA]
+city = "nyc"
+tz = "America/New_York"
+lat = 40.77945
+lon = -73.88027
+elev_m = 9
+name = "New York/La Guardia Arpt"
+country = "US"
+us = true
+
+[KMIA]
+city = "miami"
+tz = "America/New_York"
+lat = 25.78806
+lon = -80.31692
+elev_m = 1
+name = "Miami Intl"
+country = "US"
+us = true
+
+[KORD]
+city = "chicago"
+tz = "America/Chicago"
+lat = 41.96017
+lon = -87.93161
+elev_m = 202
+name = "Chicago/O'Hare Intl"
+country = "US"
+us = true
+
+[KSEA]
+city = "seattle"
+tz = "America/Los_Angeles"
+lat = 47.44467
+lon = -122.31442
+elev_m = 115
+name = "Seattle-Tacoma Intl"
+country = "US"
+us = true
+
+[KSFO]
+city = "san-francisco"
+tz = "America/Los_Angeles"
+lat = 37.61961
+lon = -122.36561
+elev_m = 2
+name = "San Francisco Intl"
+country = "US"
+us = true
+
+[LEMD]
+city = "madrid"
+tz = "Europe/Madrid"
+lat = 40.466
+lon = -3.555
+elev_m = 589
+name = "Madrid/Barajas Arpt"
+country = "ES"
+us = false
+
+[LFPB]
+city = "paris"
+tz = "Europe/Paris"
+lat = 48.967
+lon = 2.428
+elev_m = 50
+name = "Paris/Le Bourge Arpt"
+country = "FR"
+us = false
+
+[LIMC]
+city = "milan"
+tz = "Europe/Rome"
+lat = 45.631
+lon = 8.728
+elev_m = 221
+name = "Milan/Malpensa Arpt"
+country = "IT"
+us = false
+
+[LLBG]
+city = "tel-aviv"
+tz = "Asia/Jerusalem"
+lat = 32.011
+lon = 34.887
+elev_m = 35
+name = "Tel Aviv/Ben Gurion Arpt"
+country = "IL"
+us = false
+
+[LTAC]
+city = "ankara"
+tz = "Europe/Istanbul"
+lat = 40.128
+lon = 32.995
+elev_m = 952
+name = "Ankara/Esenboğa Intl"
+country = "TR"
+us = false
+
+[LTFM]
+city = "istanbul"
+tz = "Europe/Istanbul"
+lat = 41.262
+lon = 28.74
+elev_m = 99
+name = "Istanbul Arpt"
+country = "TR"
+us = false
+
+[MMMX]
+city = "mexico-city"
+tz = "America/Mexico_City"
+lat = 19.436
+lon = -99.072
+elev_m = 2224
+name = "Mexico City Intl"
+country = "MX"
+us = false
+
+[MPMG]
+city = "panama"
+tz = "America/Panama"
+lat = 8.967
+lon = -79.555
+elev_m = 6
+name = "Panama/Gelabert Intl"
+country = "PA"
+us = false
+
+[NZWN]
+city = "wellington"
+tz = "Pacific/Auckland"
+lat = -41.331
+lon = 174.806
+elev_m = 12
+name = "Wellington Intl"
+country = "NZ"
+us = false
+
+[OEJN]
+city = "jeddah"
+tz = "Asia/Riyadh"
+lat = 21.685
+lon = 39.166
+elev_m = 8
+name = "Jeddah/King Abdulaziz Intl"
+country = "SA"
+us = false
+
+[OPKC]
+city = "karachi"
+tz = "Asia/Karachi"
+lat = 24.902
+lon = 67.139
+elev_m = 20
+name = "Karachi/Jinnah Intl"
+country = "PK"
+us = false
+
+[RCSS]
+city = "taipei"
+tz = "Asia/Taipei"
+lat = 25.069
+lon = 121.552
+elev_m = 8
+name = "Taipei/Songshan Arpt"
+country = "TW"
+us = false
+
+[RJTT]
+city = "tokyo"
+tz = "Asia/Tokyo"
+lat = 35.553
+lon = 139.781
+elev_m = 5
+name = "Tokyo/Haneda Intl"
+country = "JP"
+us = false
+
+[RKPK]
+city = "busan"
+tz = "Asia/Seoul"
+lat = 35.179
+lon = 128.938
+elev_m = 3
+name = "Busan/Gimhae Intl"
+country = "KR"
+us = false
+
+[RKSI]
+city = "seoul"
+tz = "Asia/Seoul"
+lat = 37.469
+lon = 126.451
+elev_m = 7
+name = "Seoul/Incheon Intl"
+country = "KR"
+us = false
+
+[RPLL]
+city = "manila"
+tz = "Asia/Manila"
+lat = 14.507
+lon = 121.004
+elev_m = 15
+name = "Manila/Aquino Intl"
+country = "PH"
+us = false
+
+[SAEZ]
+city = "buenos-aires"
+tz = "America/Argentina/Buenos_Aires"
+lat = -34.822
+lon = -58.536
+elev_m = 16
+name = "Buenos Aires/Pistarini Arpt"
+country = "AR"
+us = false
+
+[SBGR]
+city = "sao-paulo"
+tz = "America/Sao_Paulo"
+lat = -23.432
+lon = -46.469
+elev_m = 745
+name = "Sao Paulo Intl"
+country = "BR"
+us = false
+
+[UUWW]
+city = "moscow"
+tz = "Europe/Moscow"
+lat = 55.592
+lon = 37.261
+elev_m = 195
+name = "Moscow/Vnukovo Arpt"
+country = "RU"
+us = false
+
+[VILK]
+city = "lucknow"
+tz = "Asia/Kolkata"
+lat = 26.761
+lon = 80.889
+elev_m = 121
+name = "Lucknow/Singh Arpt"
+country = "IN"
+us = false
+
+[WMKK]
+city = "kuala-lumpur"
+tz = "Asia/Kuala_Lumpur"
+lat = 2.747
+lon = 101.714
+elev_m = 21
+name = "Kuala Lumpur Intl"
+country = "MY"
+us = false
+
+[WSSS]
+city = "singapore"
+tz = "Asia/Singapore"
+lat = 1.368
+lon = 103.982
+elev_m = 17
+name = "Singapore/Changi Intl"
+country = "SG"
+us = false
+
+[ZBAA]
+city = "beijing"
+tz = "Asia/Shanghai"
+lat = 40.082
+lon = 116.603
+elev_m = 31
+name = "Beijing Intl"
+country = "CN"
+us = false
+
+[ZGGG]
+city = "guangzhou"
+tz = "Asia/Shanghai"
+lat = 23.392
+lon = 113.307
+elev_m = 11
+name = "Guangzhou/Baiyun Intl"
+country = "CN"
+us = false
+
+[ZGSZ]
+city = "shenzhen"
+tz = "Asia/Shanghai"
+lat = 22.639
+lon = 113.803
+elev_m = 18
+name = "Shenzhen/Boan Intl"
+country = "CN"
+us = false
+
+[ZHHH]
+city = "wuhan"
+tz = "Asia/Shanghai"
+lat = 30.783
+lon = 114.205
+elev_m = 33
+name = "Wuhan/Tianhe Intl"
+country = "CN"
+us = false
+
+[ZSPD]
+city = "shanghai"
+tz = "Asia/Shanghai"
+lat = 31.146
+lon = 121.8
+elev_m = 4
+name = "Shanghai/Pudong Intl"
+country = "CN"
+us = false
+
+[ZSQD]
+city = "qingdao"
+tz = "Asia/Shanghai"
+lat = 36.362
+lon = 120.087
+elev_m = 2
+name = "Qingdao/Jiaodong Arpt"
+country = "CN"
+us = false
+
+[ZUCK]
+city = "chongqing"
+tz = "Asia/Shanghai"
+lat = 29.718
+lon = 106.639
+elev_m = 416
+name = "Chongqing/Jiangbei Intl"
+country = "CN"
+us = false
+
+[ZUUU]
+city = "chengdu"
+tz = "Asia/Shanghai"
+lat = 30.576
+lon = 103.95
+elev_m = 494
+name = "Chengdu/Shuangliu Intl"
+country = "CN"
+us = false
