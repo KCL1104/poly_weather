@@ -19,7 +19,7 @@ from . import stations as station_registry
 from .settings import Settings, load_settings
 from .storage import db
 from .util.http import make_client
-from .util.timeutil import UTC, iso, ms_to_iso, utcnow
+from .util.timeutil import ms_to_iso, utcnow
 
 log = logging.getLogger("polyweather")
 

@@ -15,7 +15,6 @@ Usage: python calibration.py <retro.sqlite> [out_dir]
 
 from __future__ import annotations
 
-import datetime as dt
 import sqlite3
 import sys
 from pathlib import Path
