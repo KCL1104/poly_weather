@@ -48,7 +48,7 @@ repo 根目錄的 `Dockerfile` 會被 Railway 自動採用，啟動指令就是 
 | `AWS_DEFAULT_REGION` | `${{<bucket>.REGION}}` |
 | `AWS_ACCESS_KEY_ID` | `${{<bucket>.ACCESS_KEY_ID}}` |
 | `AWS_SECRET_ACCESS_KEY` | `${{<bucket>.SECRET_ACCESS_KEY}}` |
-| `POLYWEATHER_S3_ADDRESSING_STYLE` | 照 Bucket 的 Credentials 分頁：`virtual` 或 `path` |
+| `POLYWEATHER_S3_ADDRESSING_STYLE` | 不用設。程式會先試 `virtual`（Railway 現在的 Bucket）、再試 `path`（舊 Bucket），記住能用的那個。要強制時才填 `virtual` 或 `path` |
 | `ALERT_WEBHOOK_URL` | 選填，Slack 或 Discord 的 incoming webhook |
 
 Bucket 的五個值用變數參照，不要複製貼上：金鑰不會出現在任何人的畫面上，重設金鑰後也不必改。
@@ -81,5 +81,5 @@ polyweather offload --backup                  # 立刻上傳並備份資料庫
 ## 還沒驗證的
 
 - Docker 映像沒有在本機建過（開發環境沒有 Docker daemon）；只驗證過相同的安裝步驟在乾淨環境可以完成。
-- 上傳只用模擬的 S3 測過，還沒對真的 Railway Bucket 跑過。
+- 上傳只用模擬的 S3 測過，還沒對真的 Railway Bucket 跑過。上線後先看 `offload` 那一行日誌：`uploaded` 大於 0 才算通。
 - `run-all` 在本機實跑過約 3 分鐘：首次啟動流程、兩個常駐程序、定時工作和收尾都正常。

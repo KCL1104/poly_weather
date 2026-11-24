@@ -10,7 +10,8 @@ Configuration comes from the usual S3 environment variables (the names Railway's
 bucket preset for the AWS SDK sets): AWS_ENDPOINT_URL, AWS_ACCESS_KEY_ID,
 AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION and AWS_S3_BUCKET_NAME. Optional:
 POLYWEATHER_S3_PREFIX (default "polyweather"), POLYWEATHER_LOCAL_RETENTION_HOURS
-(default 36) and POLYWEATHER_S3_ADDRESSING_STYLE (default "auto").
+(default 36) and POLYWEATHER_S3_ADDRESSING_STYLE (virtual, path or auto; default
+"auto", which finds the style the bucket answers to and remembers it).
 """
 
 from __future__ import annotations
@@ -52,17 +53,10 @@ class BucketConfig:
         )
 
 
-def make_s3_client():
-    """S3 client from the environment, tuned for S3-compatible stores.
-
-    Checksums are sent only when an operation requires them, because not every
-    S3-compatible store accepts the newer default checksum headers. The URL style
-    follows POLYWEATHER_S3_ADDRESSING_STYLE (virtual, path or auto).
-    """
+def _client(style: str):
     import boto3  # optional dependency: pip install polyweather[s3]
     from botocore.config import Config
 
-    style = os.environ.get("POLYWEATHER_S3_ADDRESSING_STYLE", "auto")
     return boto3.client(
         "s3",
         config=Config(
@@ -72,6 +66,49 @@ def make_s3_client():
             retries={"max_attempts": 5, "mode": "standard"},
         ),
     )
+
+
+def make_s3_client(conn: sqlite3.Connection | None = None, bucket: str | None = None, *, factory=_client):
+    """S3 client from the environment, tuned for S3-compatible stores.
+
+    Checksums are sent only when an operation requires them, because not every
+    S3-compatible store accepts the newer default checksum headers.
+
+    The URL style follows POLYWEATHER_S3_ADDRESSING_STYLE when it says virtual or
+    path. Otherwise, with a custom endpoint, the style is found by asking for the
+    bucket: virtual-hosted first (what Railway's buckets use), then path-style (older
+    buckets, MinIO). The SDK on its own would pick path-style for any custom endpoint.
+    The style that answered is remembered in ``kv`` and tried first next time.
+    """
+    style = os.environ.get("POLYWEATHER_S3_ADDRESSING_STYLE", "auto").strip().lower()
+    if style in ("virtual", "path"):
+        return factory(style)
+    if not os.environ.get("AWS_ENDPOINT_URL") or not bucket:
+        return factory("auto")
+
+    remembered = None
+    if conn is not None:
+        row = conn.execute("SELECT value FROM kv WHERE key='s3_addressing_style'").fetchone()
+        remembered = row[0] if row else None
+    order = ["virtual", "path"]
+    if remembered in order:
+        order.sort(key=lambda candidate: candidate != remembered)
+    for candidate in order:
+        client = factory(candidate)
+        try:
+            client.head_bucket(Bucket=bucket)
+        except Exception as exc:  # wrong style shows up as DNS, 403, 404 or redirect errors
+            log.warning("bucket did not answer with %s-style URLs: %s", candidate, exc)
+            continue
+        if conn is not None and candidate != remembered:
+            conn.execute(
+                "INSERT INTO kv(key, value) VALUES('s3_addressing_style', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (candidate,),
+            )
+        return client
+    log.warning("bucket answered to neither URL style; uploading with %s-style URLs anyway", order[0])
+    return factory(order[0])
 
 
 @dataclass
@@ -147,7 +184,7 @@ def backup_database(conn: sqlite3.Connection, settings: Settings, cfg: BucketCon
 
 def run(conn: sqlite3.Connection, settings: Settings, cfg: BucketConfig, s3=None, *, backup: bool | None = None) -> OffloadResult:
     """One pass: upload what is new, prune what is old, back up the database if due."""
-    s3 = s3 or make_s3_client()
+    s3 = s3 or make_s3_client(conn, cfg.bucket)
     result = OffloadResult()
     upload_new_files(conn, settings, cfg, s3, result)
     prune_local(conn, settings, cfg, result)

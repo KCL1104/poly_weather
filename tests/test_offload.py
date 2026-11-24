@@ -115,3 +115,62 @@ def test_cli_offload_without_a_bucket_is_a_no_op(tmp_path, monkeypatch, capsys):
         monkeypatch.delenv(name, raising=False)
     assert cli.main(["offload"]) == 0
     assert "no bucket configured" in capsys.readouterr().out
+
+
+class _StubClient:
+    def __init__(self, style, answers):
+        self.style, self.answers, self.asked = style, answers, 0
+
+    def head_bucket(self, Bucket):
+        self.asked += 1
+        if self.style not in self.answers:
+            raise RuntimeError(f"no bucket at {self.style}-style URL")
+
+
+def _factory(answers, made):
+    def make(style):
+        client = _StubClient(style, answers)
+        made.append(client)
+        return client
+    return make
+
+
+def test_explicit_url_style_is_used_without_asking(monkeypatch, settings):
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://store.example")
+    monkeypatch.setenv("POLYWEATHER_S3_ADDRESSING_STYLE", "path")
+    made = []
+    client = offload.make_s3_client(None, BUCKET, factory=_factory({"virtual"}, made))
+    assert client.style == "path" and client.asked == 0
+
+
+def test_url_style_is_left_to_the_sdk_without_a_custom_endpoint(monkeypatch):
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    monkeypatch.delenv("POLYWEATHER_S3_ADDRESSING_STYLE", raising=False)
+    made = []
+    client = offload.make_s3_client(None, BUCKET, factory=_factory(set(), made))
+    assert client.style == "auto" and client.asked == 0
+
+
+@pytest.mark.parametrize("answers, expected", [({"virtual", "path"}, "virtual"), ({"virtual"}, "virtual"), ({"path"}, "path")])
+def test_url_style_is_found_and_remembered(monkeypatch, settings, answers, expected):
+    from polyweather.storage import db
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://store.example")
+    monkeypatch.delenv("POLYWEATHER_S3_ADDRESSING_STYLE", raising=False)
+    conn = db.connect(settings.db_path)
+    made = []
+    client = offload.make_s3_client(conn, BUCKET, factory=_factory(answers, made))
+    assert client.style == expected
+    assert conn.execute("SELECT value FROM kv WHERE key='s3_addressing_style'").fetchone()[0] == expected
+
+    made.clear()
+    again = offload.make_s3_client(conn, BUCKET, factory=_factory(answers, made))
+    assert again.style == expected and [c.style for c in made] == [expected]  # remembered style asked first
+
+
+def test_url_style_falls_back_to_virtual_when_nothing_answers(monkeypatch, settings):
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://store.example")
+    monkeypatch.delenv("POLYWEATHER_S3_ADDRESSING_STYLE", raising=False)
+    made = []
+    client = offload.make_s3_client(None, BUCKET, factory=_factory(set(), made))
+    assert client.style == "virtual"
