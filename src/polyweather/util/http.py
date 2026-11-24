@@ -32,6 +32,17 @@ def make_async_client(user_agent: str = "polyweather-research/0.1", timeout: flo
     )
 
 
+MAX_RETRY_AFTER_S = 60.0
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """The Retry-After header as seconds, when it is a plain number."""
+    try:
+        return min(MAX_RETRY_AFTER_S, max(0.0, float(response.headers.get("retry-after", ""))))
+    except ValueError:
+        return None
+
+
 def request_with_retry(
     client: httpx.Client,
     method: str,
@@ -48,6 +59,7 @@ def request_with_retry(
     """
     last: Exception | None = None
     for attempt in range(retries + 1):
+        asked: float | None = None  # the wait the server asked for, if it named one
         try:
             r = client.request(method, url, **kwargs)
             if r.status_code in ok:
@@ -56,10 +68,13 @@ def request_with_retry(
                 r.raise_for_status()
                 raise httpx.HTTPStatusError(f"unexpected status {r.status_code}", request=r.request, response=r)
             last = httpx.HTTPStatusError(f"status {r.status_code}", request=r.request, response=r)
+            asked = _retry_after_seconds(r)
         except (httpx.TransportError, httpx.DecodingError) as e:
             last = e
         if attempt < retries:
             delay = backoff * (2**attempt) * (0.5 + random.random())
+            if asked is not None:
+                delay = asked + random.random() * 0.5
             log.warning("retry %s %s in %.1fs: %s", method, url, delay, last)
             time.sleep(delay)
     assert last is not None

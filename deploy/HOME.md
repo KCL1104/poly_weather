@@ -122,19 +122,18 @@ docker compose exec polyweather polyweather backup
 | `frozen_stations` | 空的。有測站被凍結代表結算規則或結算值對不上，要人工看過才解凍 |
 | `last_jobs` | 每個工作的 `ok` 都是 `true` |
 
-每天 00:30 UTC 會自動檢查前一天的存檔有沒有缺口，結果在日誌裡，也會寫進資料庫的 `daily_checks` 表。
+每天 00:30 UTC 會自動檢查前一天的存檔有沒有缺口，結果在日誌裡，也會寫進資料庫的 `daily_checks` 表。啟動後的第一次檢查會回報不齊全（日誌裡是 `job check-gaps failed with exit code 2`），因為前一天還沒開始錄，這是正常的；從第二次起才有意義。
 
 ## 驗證到哪裡
 
 2026-11-24 在 Linux 上實際跑過：
 
-- 用 `Dockerfile` 建出映像，用 `compose.yaml` 啟動。
-- 首次啟動的匯入、紀錄器、METAR 輪詢、定時工作、健康檢查。
-- 停止後再啟動，資料庫和存檔都還在，中斷的時段有記成缺口。
-- `scripts/start.sh` 從全新的 clone 開始，自己安裝並啟動。
+- **Docker**：用 `Dockerfile` 建出映像，用 `docker compose up -d --build` 啟動，前後三輪共約 40 分鐘，最長一輪 20 分鐘。首次啟動的匯入約 1 分 40 秒；紀錄器、METAR 輪詢、健康檢查，以及目錄、NBM、LAMP、集成預報、資料庫備份這幾項工作都成功。記憶體約 0.2 到 0.35 GB。
+- **停止與重啟**：`docker compose stop` 2 秒內結束，紀錄器把手上的資料寫完，沒有殘留的暫存檔。再啟動後資料庫和存檔都在，中斷的 12 秒記成一筆缺口。
+- **不用 Docker**：`scripts/start.sh` 從全新的一份程式開始，自己建立環境、安裝、匯入並啟動，跑 150 秒後正常結束。
 
 還沒驗證：
 
 - **Windows 和 macOS 上的實際執行。** Docker 方式在三種系統上跑的是同一個 Linux 容器，風險低。`scripts\start.bat` 和 Windows 上的停止處理是照文件寫的，沒有在實機上跑過。
 - **從台灣的網路連線。** 測試是在美國的雲端主機上做的。
-- **連續跑好幾天。** 最長的一次測試是十幾分鐘。
+- **連續跑好幾天。** 價格備份和兩項每日檢查排在 UTC 凌晨，這次的測試時段沒有輪到它們（它們各自單獨跑過）。

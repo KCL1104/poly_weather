@@ -50,7 +50,8 @@ def fetch_history(
         q = dict(params)
         if cursor:
             q["cursor"] = cursor
-        page = request_with_retry(client, "GET", URL, params=q).json()
+        # The endpoint times out server-side in bursts (503 with Retry-After: 1), so try longer.
+        page = request_with_retry(client, "GET", URL, params=q, retries=6).json()
         for p in page.get("data") or []:
             out.append((int(p["timestamp"]), float(p["price"]), int(p.get("resolution_seconds") or 0)))
         pg = page.get("pagination") or {}
