@@ -32,7 +32,7 @@ from ..settings import Settings
 from ..storage.parquet_sink import RollingParquetSink
 from ..util.http import make_async_client
 from ..util.timeutil import now_ms
-from .book import BookState
+from .book import BookState, price_key
 
 log = logging.getLogger(__name__)
 
@@ -86,8 +86,15 @@ class Stats:
     messages: int = 0
     by_type: dict[str, int] = field(default_factory=dict)
     checks_ok: int = 0
+    checks_recovered: int = 0  # hash not seen in the feed, but a second read matched level by level
     checks_mismatch: int = 0
     disconnects: int = 0
+
+
+def _same_levels(book, rest: dict) -> bool:
+    bids = {price_key(l["price"]): float(l["size"]) for l in rest.get("bids") or []}
+    asks = {price_key(l["price"]): float(l["size"]) for l in rest.get("asks") or []}
+    return bids == book.bids and asks == book.asks
 
 
 class Recorder:
@@ -187,6 +194,7 @@ class Recorder:
     async def _check_books(self, client) -> None:
         now = now_ms()
         # First settle the checks left pending by the previous round.
+        expired: list[tuple[str, str]] = []
         for asset, (rest_hash, deadline) in list(self._pending_checks.items()):
             book = self.state.books.get(asset)
             if book is None:
@@ -197,7 +205,9 @@ class Recorder:
                 self.stats.checks_ok += 1
             elif now >= deadline:
                 del self._pending_checks[asset]
-                self._mismatch(asset, rest_hash, now)
+                expired.append((asset, rest_hash))
+        if expired:
+            await self._confirm_mismatches(client, expired, now)
         assets = [a for a in self.state.books if a not in self._pending_checks]
         if not assets:
             return
@@ -217,6 +227,27 @@ class Recorder:
                 self.stats.checks_ok += 1
             else:
                 self._pending_checks[asset] = (rest_hash, now + int(CHECK_GRACE_S * 1000))
+
+    async def _confirm_mismatches(self, client, expired: list[tuple[str, str]], now: int) -> None:
+        """A REST hash that never showed up in the feed is only a suspicion: the REST
+        read may simply have been older than the hash history. Read those books again
+        and compare price levels directly; only a book whose levels differ is resynced."""
+        try:
+            fresh = {b.get("asset_id"): b for b in await clob.get_books(client, [a for a, _ in expired])}
+        except Exception as e:  # noqa: BLE001
+            log.warning("REST book re-check failed: %s", e)
+            fresh = {}
+        for asset, first_hash in expired:
+            book = self.state.books.get(asset)
+            rest = fresh.get(asset)
+            if book is None:
+                continue
+            if rest is not None and (rest.get("hash") in book.hashes or _same_levels(book, rest)):
+                self._last_ok_check[asset] = now
+                self.stats.checks_ok += 1
+                self.stats.checks_recovered += 1
+            else:
+                self._mismatch(asset, (rest or {}).get("hash") or first_hash, now)
 
     def _mismatch(self, asset: str, rest_hash: str, now: int) -> None:
         self.stats.checks_mismatch += 1
@@ -273,9 +304,10 @@ class Recorder:
                         next_check = now + CHECK_EVERY_S
                     if now >= next_log:
                         log.info(
-                            "recorder: %d frames, %d books, raw %.1f MB, checks ok/mismatch %d/%d, disconnects %d",
+                            "recorder: %d frames, %d books, raw %.1f MB, checks ok/recovered/mismatch %d/%d/%d, disconnects %d",
                             self.stats.frames, len(self.state.books), self.raw.bytes_written / 1e6,
-                            self.stats.checks_ok, self.stats.checks_mismatch, self.stats.disconnects,
+                            self.stats.checks_ok, self.stats.checks_recovered, self.stats.checks_mismatch,
+                            self.stats.disconnects,
                         )
                         next_log = now + 300
                     self.raw.maybe_flush(now_ms())

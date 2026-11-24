@@ -1,0 +1,8 @@
+.git
+.venv
+data
+research
+tests
+deploy
+**/__pycache__
+*.pyc

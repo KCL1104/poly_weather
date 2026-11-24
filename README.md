@@ -19,6 +19,8 @@ Polymarket 每日氣溫盤的紙上交易研究系統。只讀公開資料、只
 | 價格歷史存檔 | 交易所的 1 分鐘價格序列，紀錄器有缺口時的備援 | `polyweather prices archive` |
 | 結算值比對 | 依規則從 METAR 重建結算值，和實際結算比對；不一致就凍結測站 | `polyweather check settlement` |
 | 每日缺口檢查 | 各存檔前一天是否齊全；連續 7 天全過是第一道關卡 | `polyweather check gaps`、`check streak` |
+| 單一行程模式 | 沒有 systemd 的平台用：一個指令跑兩個常駐程序和全部定時工作 | `polyweather run-all` |
+| Bucket 上傳 | 寫完的原始檔上傳 S3 相容的 Bucket，過期的本機副本刪除，每天備份資料庫 | `polyweather offload` |
 | M0 機率分布 | NBP 五個百分位數轉成連續分布，再積分到各區間 | `polyweather.models.m0` |
 
 ## 結算規則（已從規則全文確認）
@@ -71,7 +73,14 @@ polyweather status
 
 `--history` 是匯入模式：第一次掃描時，已經發生過的規則變更不會凍結任何測站。
 
-## 部署（Ubuntu + systemd）
+## 部署
+
+兩種方式，擇一：
+
+- **Railway**（單一容器，原始資料放 Bucket）：見 [`deploy/RAILWAY.md`](deploy/RAILWAY.md)。
+- **自己的 Ubuntu 主機**（systemd）：見下一節。
+
+### Ubuntu + systemd
 
 ```bash
 git clone https://github.com/KCL1104/poly_weather.git && cd poly_weather

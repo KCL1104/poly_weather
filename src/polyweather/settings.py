@@ -1,6 +1,7 @@
 """Runtime settings, read from environment variables.
 
-POLYWEATHER_DATA_DIR   where everything is stored (default: ./data)
+POLYWEATHER_DATA_DIR   where everything is stored (default: the attached Railway volume
+                       when there is one, else ./data)
 POLYWEATHER_SCOPE      "us" (default) or "all": which stations the recorder and
                        archivers cover
 POLYWEATHER_USER_AGENT User-Agent sent to public APIs
@@ -41,7 +42,9 @@ def load_settings() -> Settings:
     if scope not in ("us", "all"):
         raise ValueError(f"POLYWEATHER_SCOPE must be 'us' or 'all', got {scope!r}")
     return Settings(
-        data_dir=Path(os.environ.get("POLYWEATHER_DATA_DIR", "data")).resolve(),
+        data_dir=Path(
+            os.environ.get("POLYWEATHER_DATA_DIR") or os.environ.get("RAILWAY_VOLUME_MOUNT_PATH") or "data"
+        ).resolve(),
         scope=scope,
         user_agent=os.environ.get("POLYWEATHER_USER_AGENT", "polyweather-research/0.1"),
     )

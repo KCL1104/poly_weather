@@ -137,7 +137,8 @@ async def test_recorder_flags_a_book_that_diverged_from_rest(recorder, conn, mon
     fc.on_frame(1_795_500_000_000, 1, json.dumps([book(asset, [("0.40", "100")], [("0.45", "30")], h="seen")]))
 
     async def rest_books(client, ids):
-        return [{"asset_id": a, "hash": rest_hash[0]} for a in ids]
+        # REST shows a bid the feed never delivered: a real divergence.
+        return [{"asset_id": a, "hash": rest_hash[0], "bids": [{"price": "0.43", "size": "9"}], "asks": []} for a in ids]
 
     monkeypatch.setattr(clob, "get_books", rest_books)
     monkeypatch.setattr(rec_mod, "CHECK_GRACE_S", 0.0)
@@ -173,3 +174,26 @@ async def test_pending_check_clears_when_the_hash_arrives(recorder, monkeypatch)
     fc.on_frame(2, 1, json.dumps(change(asset, "0.41", "7", "BUY", "newer")))  # the feed catches up
     await recorder._check_books(None)
     assert recorder.stats.checks_mismatch == 0 and recorder.stats.checks_ok >= 1
+
+
+async def test_unknown_hash_with_identical_levels_is_not_a_mismatch(recorder, conn, monkeypatch):
+    from polyweather.polymarket import clob
+    from polyweather.recorder import recorder as rec_mod
+
+    recorder._sync_universe()
+    fc = FakeConnection.instances[0]
+    asset = sorted(fc.assets)[0]
+    fc.on_frame(1_795_500_000_000, 1, json.dumps([book(asset, [("0.40", "100")], [("0.45", "30")], h="seen")]))
+
+    async def rest_books(client, ids):
+        # Same price levels, but a hash that is not in the recorder's history.
+        return [{"asset_id": a, "hash": "outside-history", "bids": [{"price": "0.4", "size": "100.0"}],
+                 "asks": [{"price": "0.45", "size": "30"}]} for a in ids]
+
+    monkeypatch.setattr(clob, "get_books", rest_books)
+    monkeypatch.setattr(rec_mod, "CHECK_GRACE_S", 0.0)
+    await recorder._check_books(None)   # pending
+    await recorder._check_books(None)   # grace over: second read matches level by level
+    assert (recorder.stats.checks_mismatch, recorder.stats.checks_recovered) == (0, 1)
+    assert fc.resynced == [] and asset in recorder.state.books
+    assert conn.execute("SELECT COUNT(*) FROM gaps").fetchone()[0] == 0

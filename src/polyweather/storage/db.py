@@ -218,6 +218,13 @@ CREATE TABLE IF NOT EXISTS job_runs (
 );
 CREATE INDEX IF NOT EXISTS job_runs_job ON job_runs(job, ts_ms);
 
+CREATE TABLE IF NOT EXISTS offloaded (
+    path        TEXT PRIMARY KEY,       -- relative to the data dir, e.g. raw/book/date=.../book-....parquet
+    size        INTEGER NOT NULL,
+    uploaded_ms INTEGER NOT NULL,
+    pruned_ms   INTEGER                 -- when the local copy was deleted
+);
+
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT

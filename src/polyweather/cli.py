@@ -82,7 +82,8 @@ def cmd_record(args, settings, conn) -> int:
 
     stats = asyncio.run(main())
     print(json.dumps({"frames": stats.frames, "messages": stats.messages, "by_type": stats.by_type,
-                      "checks_ok": stats.checks_ok, "checks_mismatch": stats.checks_mismatch,
+                      "checks_ok": stats.checks_ok, "checks_recovered": stats.checks_recovered,
+                      "checks_mismatch": stats.checks_mismatch,
                       "disconnects": stats.disconnects, "raw_bytes": rec.raw.bytes_written,
                       "snapshot_bytes": rec.snaps.bytes_written}))
     return 0
@@ -199,6 +200,42 @@ def cmd_check(args, settings, conn) -> int:
     return 0
 
 
+def cmd_offload(args, settings, conn) -> int:
+    from .ops import offload
+
+    cfg = offload.BucketConfig.from_env()
+    if cfg is None:
+        print(json.dumps({"skipped": "no bucket configured (set AWS_S3_BUCKET_NAME and the S3 credentials)"}))
+        return 0
+
+    def run():
+        r = offload.run(conn, settings, cfg, backup=True if args.backup else None)
+        return {"bucket": cfg.bucket, "uploaded": r.uploaded, "uploaded_mb": round(r.uploaded_bytes / 1e6, 1),
+                "pruned": r.pruned, "pruned_mb": round(r.pruned_bytes / 1e6, 1), "db_backup": r.db_backup,
+                "disk": offload.disk_usage(settings)}
+
+    return _job(conn, "offload", run)
+
+
+def cmd_run_all(args, settings, conn) -> int:
+    from .ops import offload, supervisor
+
+    bucket = offload.BucketConfig.from_env()
+    jobs = supervisor.default_jobs(bucket is not None, ensemble_source=args.ensemble_source)
+    services = [supervisor.Service("recorder", ["record"]), supervisor.Service("metar", ["metar", "poll"])]
+    sup = supervisor.Supervisor(settings, services, jobs)
+    log.info("run-all: data dir %s, scope %s, bucket %s, disk %s", settings.data_dir, settings.scope,
+             bucket.bucket if bucket else "none", offload.disk_usage(settings))
+    log.info("schedule: %s", supervisor.describe(jobs))
+    steps = supervisor.first_boot_steps(conn)
+    conn.close()  # the children own the database from here on
+    for step_args, timeout in steps:
+        if sup.run_once(step_args, timeout) != 0:
+            sup.alert(f"polyweather start-up step failed: {' '.join(step_args)}")
+    sup.run(args.duration)
+    return 0
+
+
 def cmd_station(args, settings, conn) -> int:
     from .catalog import scanner
 
@@ -305,6 +342,15 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--no-freeze", action="store_true", help="report mismatches without freezing stations")
     c.set_defaults(fn=cmd_check)
 
+    c = sub.add_parser("offload", help="upload finished archive files to the S3 bucket and prune old local copies")
+    c.add_argument("--backup", action="store_true", help="also upload a database backup now")
+    c.set_defaults(fn=cmd_offload)
+
+    c = sub.add_parser("run-all", help="run collectors and all scheduled jobs in one process tree (no systemd)")
+    c.add_argument("--duration", type=float, default=None, help="stop after N seconds (for testing)")
+    c.add_argument("--ensemble-source", choices=["openmeteo", "ecmwf_open"], default="openmeteo")
+    c.set_defaults(fn=cmd_run_all)
+
     c = sub.add_parser("station", help="show or lift station freezes")
     c.add_argument("action", choices=["status", "thaw"])
     c.add_argument("icao", nargs="?")
@@ -332,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.fn(args, settings, conn)
     finally:
-        conn.close()
+        conn.close()  # closing twice is harmless
 
 
 if __name__ == "__main__":

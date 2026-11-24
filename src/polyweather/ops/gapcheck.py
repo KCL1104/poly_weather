@@ -53,15 +53,23 @@ def check_book(conn: sqlite3.Connection, settings: Settings, day: dt.date) -> Ch
         total += max(0, b - a)
         if b - a > BOOK_GAP_LIMIT_MS:
             long_gaps.append({"start": iso(dt.datetime.fromtimestamp(a / 1000, UTC)), "seconds": round((b - a) / 1000), "key": r["key"], "reason": r["reason"]})
-    raw_files = read_partitions(settings.raw_dir / "book", day.isoformat(), day.isoformat())
-    snap_files = read_partitions(settings.raw_dir / "snapshots", day.isoformat(), day.isoformat())
-    ok = bool(raw_files) and not long_gaps and len(snap_files) >= 1380  # 1440 expected; allow 60 late/skipped
+    raw_files = _count_files(conn, settings, "book", day)
+    snap_files = _count_files(conn, settings, "snapshots", day)
+    ok = raw_files > 0 and not long_gaps and snap_files >= 1380  # 1440 expected; allow 60 late/skipped
     return Check(
         "book",
         ok,
-        {"raw_files": len(raw_files), "snapshots": len(snap_files), "gaps": len(rows),
+        {"raw_files": raw_files, "snapshots": snap_files, "gaps": len(rows),
          "gap_seconds": round(total / 1000), "gaps_over_60s": long_gaps},
     )
+
+
+def _count_files(conn: sqlite3.Connection, settings: Settings, kind: str, day: dt.date) -> int:
+    """Files of one date partition: those on disk plus those already moved to the bucket."""
+    prefix = f"raw/{kind}/date={day.isoformat()}/"
+    local = {f"{prefix}{p.name}" for p in read_partitions(settings.raw_dir / kind, day.isoformat(), day.isoformat())}
+    moved = {r[0] for r in conn.execute("SELECT path FROM offloaded WHERE path LIKE ?", (prefix + "%",))}
+    return len(local | moved)
 
 
 def check_metar(conn: sqlite3.Connection, settings: Settings, day: dt.date) -> Check:

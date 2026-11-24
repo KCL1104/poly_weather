@@ -12,7 +12,9 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 
 PRICE_SCALE = 10_000
-HASH_HISTORY = 5_000
+# Enough to bridge the seconds between a REST read and the feed catching up, per book;
+# a long history on every book would cost a gigabyte of memory.
+HASH_HISTORY = 500
 
 
 def price_key(price: str | float) -> int:
