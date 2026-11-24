@@ -88,6 +88,29 @@ def parse_nbp(block: Block) -> list[TxnRow]:
     return out
 
 
+def parse_nbs_txn(block: Block) -> list[tuple[dt.datetime, int, str, int]]:
+    """Deterministic max/min temperature of one NBS block: (valid, forecast hour, kind, °F).
+
+    NBS is issued every hour, so its latest value is hours fresher than NBP's. Fields
+    are 3 characters wide starting at column 5; a TXN value sits under the 00Z column
+    (daytime maximum) or the 12Z column (overnight minimum).
+    """
+    rows = {l[1:4]: l for l in block.text.splitlines() if len(l) > 4}
+    if "FHR" not in rows or "TXN" not in rows:
+        return []
+    n = (len(rows["FHR"].rstrip()) - 5 + 2) // 3
+    fhrs = [to_int(x) for x in fixed_fields(rows["FHR"], 5, 3, n)]
+    txn = [to_int(x) for x in fixed_fields(rows["TXN"], 5, 3, n)]
+    out = []
+    for fhr, value in zip(fhrs, txn):
+        if fhr is None or value is None:
+            continue
+        valid = block.cycle + dt.timedelta(hours=fhr)
+        if valid.hour in (0, 12):
+            out.append((valid, fhr, "max" if valid.hour == 0 else "min", value))
+    return out
+
+
 def store_txn(conn: sqlite3.Connection, rows: list[TxnRow]) -> int:
     new = 0
     for r in rows:

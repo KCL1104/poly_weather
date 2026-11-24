@@ -70,3 +70,12 @@ def test_parse_lamp_short_and_extended(fixtures):
     assert [ext[0].fhr, ext[-1].fhr] == [26, 38]
     assert (ext[0].valid, ext[0].tmp_f) == (dt.datetime(2026, 11, 25, 11, tzinfo=UTC), 37)
     assert lamp.cycle_url(b.cycle, "lav").endswith("/lmp.20261124/lmp.t0930z.lavtxt.ascii")
+
+
+def test_parse_nbs_deterministic_max_min(fixtures):
+    b = extract_blocks((fixtures / "nbs_klga_20261124_10.txt").read_bytes(), {"KLGA"})[0]
+    assert b.cycle == dt.datetime(2026, 11, 24, 10, tzinfo=UTC)
+    rows = nbm.parse_nbs_txn(b)
+    assert rows[0] == (dt.datetime(2026, 11, 25, 0, tzinfo=UTC), 14, "max", 49)   # today's high
+    assert rows[1] == (dt.datetime(2026, 11, 25, 12, tzinfo=UTC), 26, "min", 37)
+    assert [r[3] for r in rows] == [49, 37, 48, 45, 59] and [r[2] for r in rows] == ["max", "min", "max", "min", "max"]
