@@ -1,0 +1,23 @@
+[Unit]
+Description=polyweather: METAR archive (aviationweather.gov)
+After=network-online.target
+Wants=network-online.target
+OnFailure=polyweather-alert@%n.service
+
+[Service]
+Type=simple
+User=polyweather
+Group=polyweather
+WorkingDirectory=/opt/polyweather
+EnvironmentFile=/etc/polyweather.env
+ExecStart=/opt/polyweather/.venv/bin/polyweather metar poll
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/polyweather
+
+[Install]
+WantedBy=multi-user.target

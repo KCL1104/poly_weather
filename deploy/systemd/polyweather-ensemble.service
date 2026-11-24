@@ -1,0 +1,19 @@
+[Unit]
+Description=polyweather: ensemble forecast archive (Open-Meteo)
+After=network-online.target
+Wants=network-online.target
+OnFailure=polyweather-alert@%n.service
+
+[Service]
+Type=oneshot
+User=polyweather
+Group=polyweather
+WorkingDirectory=/opt/polyweather
+EnvironmentFile=/etc/polyweather.env
+ExecStart=/opt/polyweather/.venv/bin/polyweather ensemble archive --source openmeteo
+TimeoutStartSec=900
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/polyweather

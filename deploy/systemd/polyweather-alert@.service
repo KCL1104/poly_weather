@@ -1,0 +1,10 @@
+[Unit]
+Description=polyweather: alert for failed unit %i
+
+[Service]
+Type=oneshot
+User=polyweather
+Group=polyweather
+SupplementaryGroups=systemd-journal
+EnvironmentFile=/etc/polyweather.env
+ExecStart=/opt/polyweather/deploy/alert.sh %i

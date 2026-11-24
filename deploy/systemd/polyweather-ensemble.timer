@@ -1,0 +1,10 @@
+[Unit]
+Description=polyweather: ensemble forecast archive hourly
+
+[Timer]
+OnCalendar=*:20
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

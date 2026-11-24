@@ -1,0 +1,10 @@
+[Unit]
+Description=polyweather: exchange price-history archive daily
+
+[Timer]
+OnCalendar=*-*-* 00:40:00 UTC
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

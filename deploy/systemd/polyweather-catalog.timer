@@ -1,0 +1,10 @@
+[Unit]
+Description=polyweather: market catalog scan every 10 minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

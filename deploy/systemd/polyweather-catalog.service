@@ -1,0 +1,19 @@
+[Unit]
+Description=polyweather: market catalog scan
+After=network-online.target
+Wants=network-online.target
+OnFailure=polyweather-alert@%n.service
+
+[Service]
+Type=oneshot
+User=polyweather
+Group=polyweather
+WorkingDirectory=/opt/polyweather
+EnvironmentFile=/etc/polyweather.env
+ExecStart=/opt/polyweather/.venv/bin/polyweather catalog scan
+TimeoutStartSec=600
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/polyweather

@@ -1,0 +1,11 @@
+[Unit]
+Description=polyweather: settlement value check twice a day
+
+[Timer]
+OnCalendar=*-*-* 00:15:00 UTC
+OnCalendar=*-*-* 12:15:00 UTC
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
