@@ -129,7 +129,10 @@ def upsert_event(
     prev = conn.execute(
         "SELECT rules_hash, resolution_source FROM events WHERE event_id=?", (event_id,)
     ).fetchone()
-    station = spec.station
+    # An event that stops parsing no longer names a station; the freeze must still land
+    # on the station it was resolved by until now.
+    before_row = conn.execute("SELECT station FROM resolution_specs WHERE event_id=?", (event_id,)).fetchone()
+    station = spec.station or (before_row["station"] if before_row else None)
     result.events_seen += 1
     if prev is None:
         result.events_new += 1
