@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 LATENCY_MS = 2_000
 LEVEL_SHARE = 0.25
 MIN_FILLABLE_USD = 5.0
-SHARE_STEP = 0.01  # the exchange trades in hundredths of a share
+SHARE_STEP = 0.01
+# The limit is found on the finest grid the exchange uses, never on the market's own tick size. The
+# exchange changes a market's tick (0.01 to 0.001 near the extremes) while it trades, and the catalog
+# only holds the current one, so a limit built on it would differ between a decision and its replay.
+# For a taker the grid does not matter: a level qualifies if a share bought there still leaves the edge.
+FINEST_TICK = 0.0001  # the exchange trades in hundredths of a share
 
 
 def fee_per_share(price: float, rate: float) -> float:

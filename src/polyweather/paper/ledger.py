@@ -154,7 +154,6 @@ def decide(
     rows = []
     for c in candidates:
         rate = ASSUMED_FEE_RATE if c.market["fee_rate"] is None else float(c.market["fee_rate"])
-        tick = float(c.market["tick_size"] or 0.001)
         row = {"c": c, "rate": rate, "quote": {}, "edge": None, "reason": None, "detail": dict(c.detail), "fill": None, "fill_opt": None}
         if c.market["fee_rate"] is None:
             row["detail"]["fee_rate_assumed"] = rate
@@ -170,7 +169,7 @@ def decide(
         if book_now is None or book_later is None:
             row["reason"], row["detail"]["why"] = "data_gap", why_gap.get(c.token, "no book")
             continue
-        limit = fills.limit_price(c.win_prob, rules.min_edge, rate, tick)
+        limit = fills.limit_price(c.win_prob, rules.min_edge, rate, fills.FINEST_TICK)
         cap = rules.max_price.get(c.side)
         if cap is not None and limit is not None and limit > cap:
             limit, row["detail"]["tail_protection"] = cap, cap

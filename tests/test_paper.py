@@ -584,3 +584,19 @@ def test_brackets_ruled_out_by_the_first_report_of_the_day_are_marked(world):
     h2a.take_measurements(conn, BookHistory(settings, conn), engine.LIVE, SEEN + 10_000)
     groups = report.build(conn)["h2a_ruled_out_brackets"]
     assert groups["by_the_first_report_of_the_day"]["+0s"]["measured"] == 5 and groups["during_the_day"]["+0s"]["brackets"] == 0
+
+
+def test_a_tick_size_changed_by_the_exchange_does_not_change_a_replayed_decision(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    write_books(settings, no_books(markets, {"56-57°F": [[0.95, 4000.0]], "54-55°F": [[0.975, 300.0]]}))
+    conn.execute("UPDATE markets SET tick_size = 0.01")
+    engine.process(conn, settings, engine.LIVE, T0, SEEN + 10_000)
+    conn.execute("INSERT INTO kv(key, value) VALUES('paper_cursor_ms', ?), ('paper_start_ms', ?)", (str(SEEN + 10_000), str(T0)))
+    conn.execute("UPDATE markets SET tick_size = 0.001")               # the catalog only knows the current one
+    assert engine.reconcile(conn, settings, "2026-11-09", now=SEEN + ms(days=1))["ok"]
+
+    def signals(run):
+        return [tuple(r) for r in conn.execute(
+            "SELECT ledger, ts_ms, market_id, side, decision, skip_reason, edge, detail FROM paper_signals WHERE run=? ORDER BY 1, 2, 3, 4", (run,))]
+
+    assert signals("replay:2026-11-09") == signals(engine.LIVE)

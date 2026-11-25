@@ -69,7 +69,7 @@ def plan_measurements(conn: sqlite3.Connection, run: str, city_day: CityDay, ts_
 def take_measurements(conn: sqlite3.Connection, books: BookHistory, run: str, horizon_ms: int) -> int:
     """Fill in the measurements whose moment the recording now covers."""
     rows = conn.execute(
-        """SELECT p.rowid AS rid, p.market_id, p.at_ms, m.no_token, m.fee_rate, m.tick_size FROM paper_measurements p
+        """SELECT p.rowid AS rid, p.market_id, p.at_ms, m.no_token, m.fee_rate FROM paper_measurements p
            JOIN markets m ON m.market_id = p.market_id
            WHERE p.run=? AND p.ledger=? AND p.status='pending' AND p.at_ms<=? ORDER BY p.at_ms""",
         (run, RULES.name, horizon_ms),
@@ -84,7 +84,7 @@ def take_measurements(conn: sqlite3.Connection, books: BookHistory, run: str, ho
         best = asks[0] if asks else (None, None)
         # The falsification test asks how much could be bought. Counted twice: everything below 1 (the
         # sell orders parked at 0.999 included), and only what still leaves the ledger's threshold.
-        limit = fills.limit_price(1.0, RULES.min_edge, rate, float(r["tick_size"] or 0.001))
+        limit = fills.limit_price(1.0, RULES.min_edge, rate, fills.FINEST_TICK)
         within = 0.0 if limit is None else sum(p * s * fills.LEVEL_SHARE for p, s in asks if p <= limit + 1e-12)
         conn.execute(
             """UPDATE paper_measurements SET status='ok', best_ask=?, ask_size=?, fillable_usd=?, edge=?, fillable_at_threshold_usd=?
