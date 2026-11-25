@@ -176,7 +176,8 @@ def process(conn: sqlite3.Connection, settings: Settings, run: str, after_ms: in
 
     Everything that happened at one moment is written in one transaction, together with
     the cursor when ``move_cursor`` is set. A run that is killed half way therefore
-    continues exactly where it stopped and never handles a trigger twice.
+    continues exactly where it stopped and never handles a trigger twice, and neither do
+    two runs started at the same time.
     """
     books = books or BookHistory(settings, conn)
     s = RunSummary(run=run, from_ms=after_ms, to_ms=until_ms)
@@ -184,8 +185,11 @@ def process(conn: sqlite3.Connection, settings: Settings, run: str, after_ms: in
     triggers += [(ts, 1, station, cycle) for ts, station, cycle in lamp_triggers(conn, after_ms, until_ms)]
     triggers.sort(key=lambda t: (t[0], t[1], t[2]))
     for ts, same_moment in itertools.groupby(triggers, key=lambda t: t[0]):
-        conn.execute("BEGIN")
+        conn.execute("BEGIN IMMEDIATE")
         try:
+            if move_cursor and (_cursor(conn) or 0) >= ts:
+                conn.execute("ROLLBACK")  # another run got here first while this one was working
+                continue
             for _ts, kind, station, payload in same_moment:
                 if kind == 0:
                     _handle_metar(conn, books, run, ts, station, payload, only_date, s)

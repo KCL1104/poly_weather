@@ -17,6 +17,7 @@ import sys
 from . import stations as station_registry
 from .settings import Settings, load_settings
 from .storage import db
+from .util import lock
 from .util.http import make_client
 from .util.stop import on_stop
 from .util.timeutil import iso, ms_to_iso, now_ms, utcnow
@@ -69,9 +70,22 @@ def cmd_catalog_scan(args, settings, conn) -> int:
     return _job(conn, "catalog", run)
 
 
+def _only_one(settings: Settings, name: str, what: str) -> bool:
+    """Take the single-instance lock ``name``; False (after saying why) if another process has it."""
+    try:
+        lock.hold(settings.db_path.parent, name)
+        return True
+    except lock.Busy:
+        print(f"{what} is already running on this data directory ({settings.data_dir}). "
+              "Stop the other one first, or point POLYWEATHER_DATA_DIR somewhere else.", file=sys.stderr)
+        return False
+
+
 def cmd_record(args, settings, conn) -> int:
     from .recorder.recorder import Recorder
 
+    if not _only_one(settings, "recorder", "A recorder"):
+        return 3
     rec = Recorder(settings, conn)
 
     async def main():
@@ -228,6 +242,12 @@ def cmd_backup(args, settings, conn) -> int:
 def cmd_paper(args, settings, conn) -> int:
     from .paper import engine, report
 
+    if args.action in ("run", "replay", "reconcile"):
+        try:
+            lock.hold(settings.db_path.parent, "paper")
+        except lock.Busy:
+            print(json.dumps({"skipped": "another paper run is working on this data directory"}))
+            return 0 if args.action == "run" else 3
     if args.action == "run":
         return _job(conn, "paper", lambda: engine.run_live(conn, settings).as_dict())
     if args.action == "prepare":
@@ -259,6 +279,8 @@ def cmd_paper(args, settings, conn) -> int:
 def cmd_run_all(args, settings, conn) -> int:
     from .ops import offload, supervisor
 
+    if not _only_one(settings, "run-all", "polyweather run-all"):
+        return 3
     bucket = offload.BucketConfig.from_env()
     jobs = supervisor.default_jobs(bucket is not None, ensemble_source=args.ensemble_source)
     services = [supervisor.Service("recorder", ["record"]), supervisor.Service("metar", ["metar", "poll"])]

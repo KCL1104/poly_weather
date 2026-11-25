@@ -531,3 +531,13 @@ def test_a_cycle_archived_by_the_fetch_job_is_usable_at_its_own_trigger_time(con
     day_end = dt.datetime(2026, 11, 25, 5, tzinfo=UTC)
     assert h2b.forecast_ahead(conn, "KLGA", cycle, cycle, day_end, seen_until_ms=ts) is not None
     assert h2b.forecast_ahead(conn, "KLGA", cycle, cycle, day_end, seen_until_ms=ts - 1) is None
+
+
+def test_two_runs_at_once_do_not_book_anything_twice(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    write_books(settings, no_books(markets, {"56-57°F": [[0.95, 4000.0]]}))
+    # Both runs read the cursor before either had written: both believe the report is theirs to handle.
+    first = engine.process(conn, settings, engine.LIVE, T0, SEEN + 10_000, move_cursor=True)
+    second = engine.process(conn, settings, engine.LIVE, T0, SEEN + 10_000, move_cursor=True)
+    assert (first.entered, second.entered, second.triggers) == (1, 0, 0)
+    assert conn.execute("SELECT COUNT(*) FROM paper_fills WHERE variant='conservative'").fetchone()[0] == 1

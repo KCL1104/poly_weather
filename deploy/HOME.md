@@ -143,6 +143,16 @@ docker compose exec polyweather polyweather paper report
 
 每天 00:30 UTC 會自動檢查前一天的存檔有沒有缺口，結果在日誌裡，也會寫進資料庫的 `daily_checks` 表。啟動後的第一次檢查會回報不齊全（日誌裡是 `job check-gaps failed with exit code 2`），因為前一天還沒開始錄，這是正常的；從第二次起才有意義。
 
+### 同一個資料夾只能跑一份
+
+同一個資料夾同時跑兩份會讓每筆訊息錄兩次、工作互相卡住，所以第二份會直接結束並顯示：
+
+```
+polyweather run-all is already running on this data directory (...). Stop the other one first, or point POLYWEATHER_DATA_DIR somewhere else.
+```
+
+看到這個訊息代表已經有一份在跑（例如 Docker 和 `start.bat` 同時開了，或 `start.bat` 點了兩次）。留一份就好。這個鎖跟著程序走，當機或斷電後不需要清任何檔案。
+
 ## 驗證到哪裡
 
 2026-11-25 做了一次完整驗證。所有檢查都從 GitHub 重新 clone 的程式出發。

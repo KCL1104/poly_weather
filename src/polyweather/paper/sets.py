@@ -63,8 +63,11 @@ def scan(conn: sqlite3.Connection, books: BookHistory, until_ms: int) -> dict:
             levels = json.loads(r["asks"])
             if levels:
                 asks[r["asset_id"]] = (float(levels[0][0]), float(levels[0][1]))
-        day = None
-        conn.execute("BEGIN")
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT value FROM kv WHERE key=?", (CURSOR_KEY,)).fetchone()
+        if row and int(row[0]) >= snap_ms:
+            conn.execute("ROLLBACK")  # another run counted this snapshot meanwhile
+            continue
         for event_id, ev in events.items():
             yes = [(l[0], l[2]) for l in ev["legs"]]
             no = [(l[1], l[2]) for l in ev["legs"] if l[1] in asks]
@@ -74,7 +77,6 @@ def scan(conn: sqlite3.Connection, books: BookHistory, until_ms: int) -> dict:
                 checked += 1
                 n, tokens = len(legs), [t for t, _ in legs]
                 cost = sum(cost_per_share(asks[t][0], rate) for t, rate in legs)
-                day = ev["obs_date"]
                 conn.execute(
                     """INSERT INTO paper_set_days(obs_date, side, snapshots, profitable, best_edge) VALUES(?,?,1,?,?)
                        ON CONFLICT(obs_date, side) DO UPDATE SET snapshots = snapshots + 1, profitable = profitable + excluded.profitable,
