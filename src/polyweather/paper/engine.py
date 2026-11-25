@@ -111,7 +111,8 @@ def _handle_metar(conn, books, run: str, ts: int, station: str, reports: list[sq
         s.triggers += 1
         cands, _info = h2a.candidates(conn, city_day, ts)
         newest = max(r["obs_time"] for r in reports if city_day.day_start <= parse_iso(r["obs_time"]) < city_day.day_end)
-        s.measurements_planned += h2a.plan_measurements(conn, run, city_day, ts, newest)
+        if run == LIVE:  # the measurement is taken once, by the ledger of record
+            s.measurements_planned += h2a.plan_measurements(conn, run, city_day, ts, newest)
         counts = ledger.decide(conn, books, h2a.RULES, run, ts, city_day, cands, f"METAR {station} {newest}")
         s.signals += counts["candidates"]
         s.entered += counts["entered"]

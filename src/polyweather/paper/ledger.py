@@ -30,6 +30,7 @@ from .books import BookHistory, asks_of, bids_of
 
 SKIP_REASONS = ("below_threshold", "over_cap", "no_liquidity", "frozen", "data_gap", "not_best")
 MIN_ORDER_USD = 1.0
+ASSUMED_FEE_RATE = 0.01  # the weather category's taker rate, used only if a market carries no fee schedule
 
 
 @dataclass(frozen=True)
@@ -152,9 +153,11 @@ def decide(
 
     rows = []
     for c in candidates:
-        rate = float(c.market["fee_rate"] or 0.0)
+        rate = ASSUMED_FEE_RATE if c.market["fee_rate"] is None else float(c.market["fee_rate"])
         tick = float(c.market["tick_size"] or 0.001)
         row = {"c": c, "rate": rate, "quote": {}, "edge": None, "reason": None, "detail": dict(c.detail), "fill": None, "fill_opt": None}
+        if c.market["fee_rate"] is None:
+            row["detail"]["fee_rate_assumed"] = rate
         rows.append(row)
         book_now, book_later = at_signal.get(c.token), at_fill.get(c.token)
         if book_now is not None:

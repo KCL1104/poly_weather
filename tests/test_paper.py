@@ -397,3 +397,37 @@ def test_iem_lamp_archive_parses_into_hourly_rows(fixtures):
     assert (first.station, first.cycle, first.valid, first.fhr, first.tmp_f) == (
         "KLGA", dt.datetime(2026, 11, 24, 10, 30, tzinfo=UTC), dt.datetime(2026, 11, 24, 11, 0, tzinfo=UTC), 1, 45)
     assert len({r.cycle for r in rows}) == 4 and max(r.fhr for r in rows) == 38
+
+
+# ---- the live run ------------------------------------------------------------------------------------
+
+
+def _recorder_state(settings, alive_ms, flushed_ms):
+    (settings.state_dir / "recorder.json").write_text(json.dumps({"last_alive_ms": alive_ms, "flushed_through_ms": flushed_ms}), encoding="utf-8")
+
+
+def test_live_run_stays_behind_the_recording_and_never_handles_a_trigger_twice(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    write_books(settings, no_books(markets, {"56-57°F": [[0.95, 4000.0]]}))
+
+    # the recorder has written up to one minute past the report: too close, the engine waits
+    _recorder_state(settings, SEEN + 61_000, SEEN + 60_000)
+    first = engine.run_live(conn, settings, now=SEEN + 61_000)
+    assert first.triggers == 0 and conn.execute("SELECT COUNT(*) FROM paper_signals").fetchone()[0] == 0
+
+    _recorder_state(settings, SEEN + 301_000, SEEN + 300_000)
+    second = engine.run_live(conn, settings, now=SEEN + 301_000)
+    assert (second.triggers, second.entered) == (1, 1)
+    assert second.to_ms == SEEN + 300_000 - engine.LAG_MS
+    assert second.measurements_planned == 4 and second.measurements_taken == 2      # +0 s and +60 s are behind the horizon already
+
+    third = engine.run_live(conn, settings, now=SEEN + 302_000)
+    assert third.triggers == 0 and conn.execute("SELECT COUNT(*) FROM paper_fills WHERE variant='conservative'").fetchone()[0] == 1
+
+
+def test_live_run_without_a_running_recorder_still_moves_on(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    write_books(settings, no_books(markets, {"56-57°F": [[0.95, 4000.0]]}))
+    _recorder_state(settings, SEEN + 10_000, SEEN + 9_000)                           # last sign of life long ago
+    s = engine.run_live(conn, settings, now=SEEN + 3_600_000)
+    assert s.to_ms == SEEN + 3_600_000 - engine.LAG_MS and s.triggers == 1 and s.entered == 1
