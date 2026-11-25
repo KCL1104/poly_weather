@@ -22,7 +22,7 @@ import pandas as pd
 from scipy import optimize, stats
 
 from calibration import add_walk_forward, build_pairs
-from common import UTC
+from common import UTC, until_iso
 from polyweather import stations
 from polyweather.catalog.brackets import Bracket
 from polyweather.models.m0 import PercentileDistribution, bracket_probabilities
@@ -46,9 +46,10 @@ def load_events(conn) -> pd.DataFrame:
         """SELECT e.event_id, s.station, s.obs_date AS date, m.market_id, m.group_index, m.group_title, m.lo, m.hi,
                   (m.winner = 'YES') AS win
            FROM events e JOIN resolution_specs s ON s.event_id = e.event_id JOIN markets m ON m.event_id = e.event_id
-           WHERE e.closed = 1 AND s.status = 'ok' AND s.unit = 'F' AND s.measure = 'high' AND s.obs_date >= ?
+           WHERE e.closed = 1 AND s.status = 'ok' AND s.unit = 'F' AND s.measure = 'high'
+                 AND s.obs_date >= ? AND s.obs_date <= ?
            ORDER BY s.obs_date, s.station, m.group_index""",
-        conn, params=(FIRST_DATE,),
+        conn, params=(FIRST_DATE, until_iso()),
     )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sqlite3
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,21 @@ from polyweather.resolution.settle import to_whole_unit
 UTC = dt.timezone.utc
 US = [s.icao for s in stations.in_scope("us")]
 NBP_PUBLISH_LAG_MIN = 80  # bulletins appeared 62-80 minutes after cycle time in the archive
+
+
+def study_until() -> dt.date | None:
+    """Last observation date to use, from STUDY_UNTIL=YYYY-MM-DD; None means everything.
+
+    The databases keep growing when they are rebuilt later. Setting this to the last
+    date of the original run (2026-11-23) makes a rerun cover the same sample.
+    """
+    value = os.environ.get("STUDY_UNTIL")
+    return dt.date.fromisoformat(value) if value else None
+
+
+def until_iso() -> str:
+    """``study_until`` as text for SQL comparisons with ISO dates."""
+    return (study_until() or dt.date.max).isoformat()
 
 
 def local_midnight_utc(station: str, day: dt.date) -> dt.datetime:
@@ -46,6 +62,8 @@ def daily_extremes(conn: sqlite3.Connection, station: str, sources: tuple[str, .
     g["high_f"] = g["max"].astype(int).map(lambda v: to_whole_unit(v, "F"))
     g["low_f"] = g["min"].astype(int).map(lambda v: to_whole_unit(v, "F"))
     g["station"] = station
+    if study_until():
+        g = g[g["date"] <= study_until()]
     return g.rename(columns={"count": "n"})[["station", "date", "high_f", "low_f", "n"]]
 
 
@@ -62,6 +80,8 @@ def nbp_max_rows(conn: sqlite3.Connection) -> pd.DataFrame:
     df["valid"] = pd.to_datetime(df["valid_utc"], utc=True)
     df["date"] = (df["valid"] - pd.Timedelta(days=1)).dt.date
     df["available"] = df["cycle"] + pd.Timedelta(minutes=NBP_PUBLISH_LAG_MIN)
+    if study_until():
+        df = df[df["date"] <= study_until()]
     return df.dropna(subset=["p10", "p25", "p50", "p75", "p90"]).drop(columns=["valid_utc"])
 
 

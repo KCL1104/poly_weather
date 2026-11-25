@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from common import until_iso
 from polyweather import stations
 from polyweather.polymarket import prices
 from polyweather.resolution.settle import to_whole_unit
@@ -41,14 +42,16 @@ def events(conn, since: str):
     return conn.execute(
         """SELECT e.event_id, s.station, s.obs_date, e.start_date, e.closed_time, e.end_date
            FROM events e JOIN resolution_specs s ON s.event_id = e.event_id
-           WHERE s.status='ok' AND s.unit='F' AND s.measure='high' AND e.closed=1 AND s.obs_date>=?""", (since,)).fetchall()
+           WHERE s.status='ok' AND s.unit='F' AND s.measure='high' AND e.closed=1
+                 AND s.obs_date>=? AND s.obs_date<=?""", (since, until_iso())).fetchall()
 
 
 def fetch(conn, since: str, path: str) -> None:
     rows = conn.execute(
         """SELECT m.market_id, m.yes_token, e.start_date, e.closed_time, e.end_date
            FROM markets m JOIN events e ON e.event_id = m.event_id JOIN resolution_specs s ON s.event_id = e.event_id
-           WHERE s.status='ok' AND s.unit='F' AND s.measure='high' AND e.closed=1 AND s.obs_date>=?""", (since,)).fetchall()
+           WHERE s.status='ok' AND s.unit='F' AND s.measure='high' AND e.closed=1
+                 AND s.obs_date>=? AND s.obs_date<=?""", (since, until_iso())).fetchall()
     now = int(time.time())
 
     def work(r):
