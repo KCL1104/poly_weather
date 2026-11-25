@@ -37,21 +37,43 @@ def test_default_jobs_add_offload_only_with_a_bucket():
     assert "backup" not in jobs  # the bucket upload already includes the database
 
 
+class RunLog:
+    """Where the test children leave their mark: one file per run.
+
+    One shared file would not do: two processes appending to the same file at the same
+    moment can overwrite each other on Windows (seen on a Windows CI runner).
+    """
+
+    def __init__(self, directory):
+        self.directory = directory
+
+    def __str__(self) -> str:
+        return str(self.directory)
+
+    def exists(self) -> bool:
+        return self.directory.exists() and any(self.directory.iterdir())
+
+    def count(self, kind: str) -> int:
+        return len(list(self.directory.glob(f"{kind}-*"))) if self.directory.exists() else 0
+
+
 @pytest.fixture
 def harness(tmp_path):
     """A supervisor whose children are a tiny script: `sleep N` or `exit N`."""
     script = tmp_path / "child.py"
     script.write_text(
-        "import sys, time\n"
-        "kind, value = sys.argv[1], float(sys.argv[2])\n"
-        "open(sys.argv[3], 'a').write(kind + '\\n')\n"
-        "time.sleep(value) if kind == 'sleep' else sys.exit(int(value))\n"
+        "import os, sys, time\n"
+        "kind, value, directory = sys.argv[1], float(sys.argv[2]), sys.argv[3]\n"
+        "os.makedirs(directory, exist_ok=True)\n"
+        "open(os.path.join(directory, f'{kind}-{os.getpid()}-{time.time_ns()}'), 'w').close()\n"
+        "time.sleep(value) if kind == 'sleep' else sys.exit(int(value))\n",
+        encoding="utf-8",
     )
     settings = Settings(data_dir=tmp_path, scope="us")
     settings.ensure_dirs()
     now = [dt.datetime(2026, 11, 24, 12, 0, 0, tzinfo=UTC)]
     alerts: list[str] = []
-    log = tmp_path / "runs.log"
+    log = RunLog(tmp_path / "runs")
 
     def make(services, jobs):
         sup = Supervisor(settings, services, jobs, command=[sys.executable, str(script)], clock=lambda: now[0])
@@ -83,9 +105,9 @@ def test_jobs_run_when_due_and_failures_alert(harness):
     assert _wait(lambda: ok.process.poll() is not None and bad.process.poll() is not None)
     sup.tick()
     assert alerts == ["polyweather job bad failed with exit code 3"]
-    assert log.read_text().count("exit") == 2
+    assert log.count("exit") == 2
     sup.tick()  # same slot: no second run
-    assert log.read_text().count("exit") == 2
+    assert log.count("exit") == 2
 
 
 def test_a_job_still_running_is_skipped_not_doubled(harness):
@@ -99,7 +121,7 @@ def test_a_job_still_running_is_skipped_not_doubled(harness):
     assert _wait(log.exists)
     now[0] += dt.timedelta(seconds=600)
     sup.tick()
-    assert slow.process is first and log.read_text().count("sleep") == 1
+    assert slow.process is first and log.count("sleep") == 1
     sup.stopping = True
     sup.shutdown(grace_s=5)
     assert first.poll() is not None and alerts == []
@@ -117,7 +139,7 @@ def test_a_collector_that_exits_is_restarted_with_an_alert(harness, monkeypatch)
     assert "recorder exited with code 1" in alerts[0] and "restarting in 2s" in alerts[0]
     svc.next_start = 0.0  # skip the backoff wait
     sup.tick()
-    assert svc.process is not None and _wait(lambda: log.read_text().count("exit") == 2)
+    assert svc.process is not None and _wait(lambda: log.count("exit") == 2)
     sup.stopping = True
     sup.shutdown(grace_s=5)
 
