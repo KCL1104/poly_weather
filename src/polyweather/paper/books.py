@@ -133,8 +133,11 @@ class BookHistory:
             books[a] = b
         if not books:
             return out
+        wanted = tuple(books) if len(books) <= 48 else None  # few books: skip frames that do not mention them before parsing
         for recv_ms, _seq, text in self._frames_between(snap_ms, t_ms):
             if '"book"' not in text and '"price_change"' not in text:
+                continue
+            if wanted is not None and not any(a in text for a in wanted):
                 continue
             try:
                 decoded = json.loads(text)

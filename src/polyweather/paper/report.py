@@ -62,22 +62,29 @@ def build(conn: sqlite3.Connection, run: str = engine.LIVE) -> dict:
             }
         out["ledgers"][name] = entry
 
+    # A day's first report rules out every bracket far below the night's temperature at once; those
+    # were never in play. The hypothesis is about brackets that fall during the day, so they are shown apart.
     measures = {}
-    for offset in conn.execute("SELECT DISTINCT offset_s FROM paper_measurements WHERE run=? ORDER BY 1", (run,)).fetchall():
-        rows = conn.execute(
-            "SELECT status, best_ask, fillable_usd, edge FROM paper_measurements WHERE run=? AND ledger='H2a' AND offset_s=?", (run, offset[0])
-        ).fetchall()
-        ok = [r for r in rows if r["status"] == "ok"]
-        with_ask = [r for r in ok if r["best_ask"] is not None]
-        measures[f"+{offset[0]}s"] = {
-            "brackets": len(rows), "measured": len(ok), "pending": sum(1 for r in rows if r["status"] == "pending"),
-            "in_recording_gap": sum(1 for r in rows if r["status"] == "gap"),
-            "nobody_selling_no": len(ok) - len(with_ask),
-            "median_best_ask": _median([r["best_ask"] for r in with_ask]),
-            "median_edge_after_fee": _median([r["edge"] for r in with_ask]),
-            "median_buyable_usd": _median([r["fillable_usd"] or 0.0 for r in ok]),
-            "share_with_edge_2pp": round(sum(1 for r in with_ask if r["edge"] >= 0.02) / len(ok), 4) if ok else None,
-        }
+    for label, clause in (("during_the_day", "p.trigger > d.first"), ("by_the_first_report_of_the_day", "p.trigger = d.first")):
+        group = {}
+        for offset in conn.execute("SELECT DISTINCT offset_s FROM paper_measurements WHERE run=? ORDER BY 1", (run,)).fetchall():
+            rows = conn.execute(
+                f"""SELECT p.status, p.best_ask, p.fillable_usd, p.edge FROM paper_measurements p
+                    JOIN (SELECT event_id, MIN(trigger) AS first FROM paper_measurements WHERE run=? GROUP BY event_id) d ON d.event_id = p.event_id
+                    WHERE p.run=? AND p.ledger='H2a' AND p.offset_s=? AND {clause}""", (run, run, offset[0])
+            ).fetchall()
+            ok = [r for r in rows if r["status"] == "ok"]
+            with_ask = [r for r in ok if r["best_ask"] is not None]
+            group[f"+{offset[0]}s"] = {
+                "brackets": len(rows), "measured": len(ok), "pending": sum(1 for r in rows if r["status"] == "pending"),
+                "in_recording_gap": sum(1 for r in rows if r["status"] == "gap"),
+                "nobody_selling_no": len(ok) - len(with_ask),
+                "median_best_ask": _median([r["best_ask"] for r in with_ask]),
+                "median_edge_after_fee": _median([r["edge"] for r in with_ask]),
+                "median_buyable_usd": _median([r["fillable_usd"] or 0.0 for r in ok]),
+                "share_with_edge_2pp": round(sum(1 for r in with_ask if r["edge"] >= 0.02) / len(ok), 4) if ok else None,
+            }
+        measures[label] = group
     out["h2a_ruled_out_brackets"] = measures
     out["reconciliations"] = {
         r[0].split(":", 1)[1]: json.loads(r[1])["ok"] for r in conn.execute("SELECT key, value FROM kv WHERE key LIKE 'paper_reconciled:%' ORDER BY key")
@@ -98,9 +105,12 @@ def render(report: dict, as_json: bool = False) -> str:
                      f"without the 3 best city-days {c['pnl_without_top3_city_days_usd']}")
         o = e["optimistic"]
         lines.append(f"  optimistic fills (no delay, whole visible size): invested {o['invested_usd']}, settled profit {o['settled_pnl_usd']}")
-    if report["h2a_ruled_out_brackets"]:
-        lines.append("\nH2a measurement: NO side of brackets just ruled out, by delay after the report was seen")
-        for k, m in report["h2a_ruled_out_brackets"].items():
+    for label, title in (("during_the_day", "ruled out during the day"), ("by_the_first_report_of_the_day", "ruled out by the day's first report")):
+        group = report["h2a_ruled_out_brackets"].get(label) or {}
+        if not any(m["brackets"] for m in group.values()):
+            continue
+        lines.append(f"\nH2a measurement, brackets {title}: NO side by delay after the report was seen")
+        for k, m in group.items():
             lines.append(f"  {k:>6}: {m['measured']} measured ({m['pending']} pending, {m['in_recording_gap']} in a gap, {m['nobody_selling_no']} with no seller); "
                          f"median ask {m['median_best_ask']}, median edge after fee {m['median_edge_after_fee']}, "
                          f"median buyable {m['median_buyable_usd']} USD, share with 2pp edge {m['share_with_edge_2pp']}")

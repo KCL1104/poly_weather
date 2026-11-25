@@ -2,7 +2,7 @@
 
 整套系統是一個指令：`polyweather run-all`。它會啟動訂單簿紀錄器和 METAR 輪詢，並按時間表跑其餘的工作（盤口目錄、NBM、LAMP、集成預報、價格備份、每日檢查、資料庫備份）。Windows、macOS、Linux 都能跑，兩種方式都在實機上驗證過（見最後一節）。建議用 Docker，因為開機自動啟動最省事。
 
-目前這套只收資料和做檢查，不做任何紙上下單，也沒有會自己調整的策略。
+除了收資料和做檢查，系統會跑兩本紙上帳（H2a、H2b），規則寫死、不會自己調整，說明見 README 的「紙上交易」。全程沒有任何真實下單。
 
 系統只讀公開資料，沒有錢包、不簽章、不下單。
 
@@ -130,6 +130,14 @@ docker compose exec polyweather polyweather backup
 | `disk.used_share` | 低於 0.85 |
 | `frozen_stations` | 空的。有測站被凍結代表結算規則或結算值對不上，要人工看過才解凍 |
 | `last_jobs` | 每個工作的 `ok` 都是 `true` |
+
+紙上帳本看這個：
+
+```bash
+docker compose exec polyweather polyweather paper report
+```
+
+它會列出兩本帳各自的訊號數、沒進場的原因分佈、投入金額、已結算損益，以及 H2a 的量測。每天 13:05 UTC 也會自動印一次到日誌。帳本如果顯示 `PAUSED`，代表觸發了暫停條件，原因寫在後面。
 
 每天 00:30 UTC 會自動檢查前一天的存檔有沒有缺口，結果在日誌裡，也會寫進資料庫的 `daily_checks` 表。啟動後的第一次檢查會回報不齊全（日誌裡是 `job check-gaps failed with exit code 2`），因為前一天還沒開始錄，這是正常的；從第二次起才有意義。
 
