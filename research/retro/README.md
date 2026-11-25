@@ -200,3 +200,9 @@ python h2a_window.py retro.sqlite data/inputs/prices_1m_us_high_2026-11-16_2026-
 ```
 
 盤口目錄（Gamma 的已結算事件）、IEM 的 METAR 和 NBM 公報都還是從來源重新下載，這三個來源沒有保存期限。
+
+重建出來的資料庫會包含這次執行之後才結算的盤和之後的天氣資料。要讓分析只用到原本那一批（觀測日到 2026-11-23 為止），在跑 `calibration.py`、`market_tests.py`、`h2a_window.py` 之前設定環境變數：
+
+```bash
+export STUDY_UNTIL=2026-11-23
+```

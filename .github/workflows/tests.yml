@@ -116,3 +116,44 @@ jobs:
       - name: Output of the run
         if: always()
         run: cat run.log || docker compose logs --no-color
+
+  live-systemd:
+    name: live run as systemd services (deploy/install.sh)
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[live]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install with deploy/install.sh
+        run: sudo ./deploy/install.sh
+      - name: Services are running and all seven timers are scheduled
+        run: |
+          systemctl is-active polyweather-recorder.service polyweather-metar.service
+          systemctl list-timers 'polyweather-*' --no-pager
+          test "$(systemctl list-timers 'polyweather-*' --no-pager | grep -c 'polyweather-.*\.timer')" = 7
+      - name: Let it record, and run scheduled jobs once by hand
+        run: |
+          sleep 180
+          for job in catalog nbm lamp check-settlement; do
+            sudo systemctl start polyweather-$job.service
+            echo "$job: $(systemctl show polyweather-$job.service -p Result --value)"
+          done
+          sudo -u polyweather env POLYWEATHER_DATA_DIR=/var/lib/polyweather /opt/polyweather/.venv/bin/polyweather status
+      - name: Run install.sh a second time (an update must keep data and settings)
+        run: |
+          before=$(systemctl show polyweather-recorder.service -p MainPID --value)
+          sudo ./deploy/install.sh
+          systemctl is-active polyweather-recorder.service polyweather-metar.service
+          after=$(systemctl show polyweather-recorder.service -p MainPID --value)
+          echo "recorder process before the update: $before, after: $after"
+          test "$before" != "$after"   # the update restarted it, so it runs the new code
+      - name: Stop and check what was recorded
+        run: |
+          sleep 60
+          sudo systemctl stop polyweather-recorder.service polyweather-metar.service
+          sudo journalctl -u polyweather-recorder.service --no-pager -o cat > /tmp/polyweather-run.log
+          sudo -u polyweather /opt/polyweather/.venv/bin/python /opt/polyweather/.github/scripts/check_run.py /var/lib/polyweather /tmp/polyweather-run.log
+      - name: Journal
+        if: always()
+        run: sudo journalctl -u 'polyweather-*' --no-pager -o short | tail -150
+

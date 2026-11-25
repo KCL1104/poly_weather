@@ -189,6 +189,10 @@ pytest
 
 測試用的是 2026-11-24 抓下來的真實資料：一個已結算盤的完整規則與結果、該日的 METAR 原始報文、NBM 與 LAMP 公報片段。WebSocket 和紀錄器用假連線測試重連、心跳、gap 標記與雜湊抽查。
 
+每次推送只要動到程式，GitHub Actions 會在 Ubuntu、Windows、macOS 上用 Python 3.11、3.12、3.13 各跑一次測試（`.github/workflows/tests.yml`）。
+
+同一個檔案裡還有三個「實際啟動」的工作：在三種系統上分別用 `scripts/start.sh`、`scripts\start.bat` 和 `docker compose` 把整套系統對著真的資料來源跑 5 分鐘，再檢查錄到的東西。它們不會自動跑，要在 GitHub 的 Actions 頁面按 "Run workflow"，或是在 commit 訊息裡加上 `[live]`。
+
 ## 還沒做的
 
 - 紙上撮合、五本帳、每日重播對帳（規格的「重建與模型」階段）。研究結果出來後決定先不蓋，見下方「研究紀錄」。

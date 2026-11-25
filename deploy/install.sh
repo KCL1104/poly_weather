@@ -34,7 +34,10 @@ run catalog scan --history --closed-days 3
 # Recent METAR history, so the first settlement checks see complete days.
 run metar backfill-awc --days 4
 
-systemctl enable --now polyweather-recorder.service polyweather-metar.service
+# restart, not just start: after an update the two long-running services must pick up
+# the new code (the recorder writes out what it holds and logs the pause as a gap)
+systemctl enable polyweather-recorder.service polyweather-metar.service
+systemctl restart polyweather-recorder.service polyweather-metar.service
 for t in catalog nbm lamp ensemble prices check-settlement check-gaps; do
   systemctl enable --now "polyweather-$t.timer"
 done

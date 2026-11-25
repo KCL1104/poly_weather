@@ -99,4 +99,6 @@ python evaluate.py ../retro/retro.sqlite forecast_test.sqlite ../retro/data/mark
 
 `retro.sqlite` 由 `../retro/build_inputs.py` 產生。HRRR 約 11,000 個欄位、7 分鐘；NBS 約 930 個檔、5 分鐘；IEM 會限流，約 10 分鐘。`fetch_inputs.py ... ecmwf --start 2026-09-20` 另外抓 ECMWF，S3 會限流，45 天花了約 25 分鐘；有資料時 `evaluate.py` 會自動多報幾欄。各個下載不要同時跑，它們寫同一個 SQLite 檔。
 
+之後才重跑的話，先 `export STUDY_UNTIL=2026-11-23`，分析就只用到原本那一批觀測日（說明見 `../retro/README.md`）。
+
 `data/` 裡是這次的輸出：`forecast_features.csv.gz`（每個站日、時點的各來源預報與組合）、`mae_on_market_sample.csv`、`hindsight_bound.csv`、`criterion2_blend.csv`。
