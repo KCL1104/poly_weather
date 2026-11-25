@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from .. import stations
 from ..settings import Settings
 from ..util.timeutil import UTC, now_ms, parse_iso
-from . import fills, h2a, h2b, ledger
+from . import fills, h2a, h2b, ledger, sets
 from .books import BookHistory
 
 log = logging.getLogger(__name__)
@@ -197,6 +197,7 @@ def run_live(conn: sqlite3.Connection, settings: Settings, now: int | None = Non
         s = process(conn, settings, LIVE, after, until, books=books)
         _set_cursor(conn, until)
     s.measurements_taken = h2a.take_measurements(conn, books, LIVE, until)
+    s.notes.append("bracket sets: " + json.dumps(sets.scan(conn, books, until)))
     s.settled = ledger.settle(conn, now)
     s.notes += check_drawdown(conn, now)
     s.notes += reconcile_due(conn, settings, now)

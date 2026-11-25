@@ -301,6 +301,32 @@ CREATE TABLE IF NOT EXISTS paper_measurements (
     edge         REAL,                    -- 1 minus the cost of a share at the best ask, fee included
     PRIMARY KEY (run, ledger, market_id, trigger, offset_s)
 );
+
+-- Whole sets of a city-day's brackets (every YES, or every NO) that could be bought for less
+-- than they must pay. One row per snapshot and set that showed a sure profit; the per-day
+-- table counts every snapshot checked, profitable or not.
+CREATE TABLE IF NOT EXISTS paper_set_checks (
+    snap_ms      INTEGER NOT NULL,
+    event_id     TEXT NOT NULL,
+    station      TEXT,
+    obs_date     TEXT,
+    measure      TEXT,
+    side         TEXT NOT NULL,           -- 'YES' / 'NO'
+    legs         INTEGER NOT NULL,
+    cost         REAL NOT NULL,           -- of one share of every leg at its best ask, fees included
+    edge         REAL NOT NULL,           -- what the set must pay minus that cost
+    sets_at_best REAL,                    -- shares available at the best ask of the thinnest leg
+    usd_at_best  REAL,
+    PRIMARY KEY (snap_ms, event_id, side)
+);
+CREATE TABLE IF NOT EXISTS paper_set_days (
+    obs_date   TEXT NOT NULL,
+    side       TEXT NOT NULL,
+    snapshots  INTEGER NOT NULL,
+    profitable INTEGER NOT NULL,
+    best_edge  REAL,
+    PRIMARY KEY (obs_date, side)
+);
 """
 
 

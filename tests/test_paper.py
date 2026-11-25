@@ -431,3 +431,45 @@ def test_live_run_without_a_running_recorder_still_moves_on(world):
     _recorder_state(settings, SEEN + 10_000, SEEN + 9_000)                           # last sign of life long ago
     s = engine.run_live(conn, settings, now=SEEN + 3_600_000)
     assert s.to_ms == SEEN + 3_600_000 - engine.LAG_MS and s.triggers == 1 and s.entered == 1
+
+
+# ---- whole sets of brackets ------------------------------------------------------------------------------
+
+from polyweather.paper import sets  # noqa: E402
+
+
+def test_a_whole_set_cheaper_than_its_payout_is_found_and_counted(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    n = len(markets)
+    cheap = {m["yes_token"]: ([], [[0.08, 50.0 + i]]) for i, m in enumerate(markets)}          # 11 legs at 0.08: 0.88 plus fees
+    fair = {m["no_token"]: ([], [[0.93, 500.0]]) for m in markets}                               # 11 x 0.93 = 10.23 > 10
+    write_books(settings, {**cheap, **fair})
+    books = BookHistory(settings, conn)
+    assert sets.scan(conn, books, T0 + 1) == {"sets_checked": 2, "sets_profitable": 1}
+    row = conn.execute("SELECT * FROM paper_set_checks").fetchone()
+    cost = n * fills.cost_per_share(0.08, 0.01)
+    assert (row["side"], row["legs"]) == ("YES", n) and row["cost"] == pytest.approx(cost) and row["edge"] == pytest.approx(1 - cost)
+    assert row["sets_at_best"] == 50.0                                  # the thinnest leg limits how many sets can be bought
+    assert sets.scan(conn, books, T0 + 1) == {"sets_checked": 0, "sets_profitable": 0}   # each snapshot is looked at once
+    s = sets.summary(conn)
+    assert s["YES"]["with_a_sure_profit"] == 1 and s["NO"]["with_a_sure_profit"] == 0
+    assert s["NO"]["closest_edge"] == pytest.approx((n - 1) - n * fills.cost_per_share(0.93, 0.01), abs=1e-4)
+    assert "set of YES of every bracket" in report.render(report.build(conn))
+
+
+def test_a_set_with_a_leg_nobody_sells_is_not_counted(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    books_ = {m["yes_token"]: ([], [[0.05, 50.0]]) for m in markets}
+    books_[markets[0]["yes_token"]] = ([[0.01, 5.0]], [])               # no seller on one leg
+    write_books(settings, books_)
+    assert sets.scan(conn, BookHistory(settings, conn), T0 + 1) == {"sets_checked": 0, "sets_profitable": 0}
+
+
+def test_no_shares_of_some_brackets_are_enough_for_a_sure_profit(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    three = {m["no_token"]: ([], [[0.60, 40.0]]) for m in markets[:3]}   # three NO at 0.60: at least two of them pay 1
+    write_books(settings, three)
+    assert sets.scan(conn, BookHistory(settings, conn), T0 + 1) == {"sets_checked": 1, "sets_profitable": 1}
+    row = conn.execute("SELECT * FROM paper_set_checks").fetchone()
+    cost = 3 * fills.cost_per_share(0.60, 0.01)
+    assert (row["side"], row["legs"]) == ("NO", 3) and row["edge"] == pytest.approx(2 - cost)

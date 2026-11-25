@@ -86,6 +86,9 @@ def build(conn: sqlite3.Connection, run: str = engine.LIVE) -> dict:
             }
         measures[label] = group
     out["h2a_ruled_out_brackets"] = measures
+    from . import sets
+
+    out["bracket_sets"] = sets.summary(conn)
     out["reconciliations"] = {
         r[0].split(":", 1)[1]: json.loads(r[1])["ok"] for r in conn.execute("SELECT key, value FROM kv WHERE key LIKE 'paper_reconciled:%' ORDER BY key")
     }
@@ -114,6 +117,11 @@ def render(report: dict, as_json: bool = False) -> str:
             lines.append(f"  {k:>6}: {m['measured']} measured ({m['pending']} pending, {m['in_recording_gap']} in a gap, {m['nobody_selling_no']} with no seller); "
                          f"median ask {m['median_best_ask']}, median edge after fee {m['median_edge_after_fee']}, "
                          f"median buyable {m['median_buyable_usd']} USD, share with 2pp edge {m['share_with_edge_2pp']}")
+    for side, m in (report.get("bracket_sets") or {}).items():
+        what = "YES of every bracket (pays 1)" if side == "YES" else "NO of every bracket on offer (pays their number - 1)"
+        lines.append(f"\nset of {what}: {m['city_day_snapshots_checked']} city-day snapshots checked, "
+                     f"{m['with_a_sure_profit']} with a sure profit; closest {m['closest_edge']} USD per set"
+                     + (f"; when profitable: mean edge {m['mean_edge_when_profitable']}, about {m['mean_usd_buyable_at_best_prices']} USD buyable" if m['with_a_sure_profit'] else ""))
     if report["reconciliations"]:
         lines.append("\nreconciliation by observation date: " + ", ".join(f"{d} {'ok' if ok else 'DIFFERENT'}" for d, ok in report["reconciliations"].items()))
     return "\n".join(lines)
