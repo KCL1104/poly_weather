@@ -211,8 +211,10 @@ def run_live(conn: sqlite3.Connection, settings: Settings, now: int | None = Non
     after = _cursor(conn)
     if after is None:
         # First run: start with the recording, not with history fetched before it began.
+        # Remembered, so that a replay of the first day starts at the same moment.
         first = BookHistory(settings, conn)._snaps
         after = (first[0][0] - 1) if first else until
+        conn.execute("INSERT OR IGNORE INTO kv(key, value) VALUES('paper_start_ms', ?)", (str(after),))
     books = BookHistory(settings, conn)
     if until <= after:
         s = RunSummary(run=LIVE, from_ms=after, to_ms=after, notes=["nothing new the recording covers yet"])
@@ -259,7 +261,9 @@ def replay_date(conn: sqlite3.Connection, settings: Settings, obs_date: str, unt
     if window is None:
         return RunSummary(run=run, notes=["no markets for this date"])
     until = min(window[1], until_ms) if until_ms else window[1]
-    s = process(conn, settings, run, window[0] - 1, until, only_date=obs_date)
+    began = conn.execute("SELECT value FROM kv WHERE key='paper_start_ms'").fetchone()
+    after = max(window[0] - 1, int(began[0]) if began else 0)  # the ledger of record saw nothing before it began
+    s = process(conn, settings, run, after, until, only_date=obs_date)
     return s
 
 

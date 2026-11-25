@@ -541,3 +541,46 @@ def test_two_runs_at_once_do_not_book_anything_twice(world):
     second = engine.process(conn, settings, engine.LIVE, T0, SEEN + 10_000, move_cursor=True)
     assert (first.entered, second.entered, second.triggers) == (1, 0, 0)
     assert conn.execute("SELECT COUNT(*) FROM paper_fills WHERE variant='conservative'").fetchone()[0] == 1
+
+
+def test_a_replay_starts_where_the_ledger_of_record_began(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    write_books(settings, no_books(markets, {"56-57°F": [[0.95, 4000.0]]}))
+    _recorder_state(settings, SEEN + 601_000, SEEN + 600_000)
+    engine.run_live(conn, settings, now=SEEN + 601_000)
+    assert int(conn.execute("SELECT value FROM kv WHERE key='paper_start_ms'").fetchone()[0]) == T0 - 1
+    engine.reconcile(conn, settings, "2026-11-09", now=SEEN + ms(days=1))
+
+    def signals(run):
+        return [tuple(r) for r in conn.execute(
+            "SELECT ledger, ts_ms, market_id, side, decision, skip_reason FROM paper_signals WHERE run=? ORDER BY 1, 2, 3, 4", (run,))]
+
+    # the morning's reports were fetched an hour before the recording began: neither run decides on them
+    assert signals("replay:2026-11-09") == signals(engine.LIVE) and len(signals(engine.LIVE)) == 5
+
+
+def test_measurements_of_a_report_seen_late_are_reported_apart(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    by_label = {m["group_title"]: m for m in markets}
+    write_books(settings, no_books(markets, {"56-57°F": [[0.93, 100.0]]}))
+    engine.process(conn, settings, engine.LIVE, T0, SEEN + 10_000)          # the 16:51Z report, seen a few minutes later
+    h2a.take_measurements(conn, BookHistory(settings, conn), engine.LIVE, SEEN + 10_000)
+    timely = report.build(conn)["h2a_ruled_out_brackets"]
+    assert timely["during_the_day"]["+0s"]["measured"] == 1 and timely["report_seen_late"]["+0s"]["brackets"] == 0
+
+    conn.execute("UPDATE paper_measurements SET seen_ms = seen_ms + ?", (ms(hours=1),))   # the same report, fetched after an outage
+    late = report.build(conn)["h2a_ruled_out_brackets"]
+    assert late["during_the_day"]["+0s"]["brackets"] == 0 and late["report_seen_late"]["+0s"]["measured"] == 1
+    assert "seen more than 15 minutes late" in report.render(report.build(conn))
+
+
+def test_brackets_ruled_out_by_the_first_report_of_the_day_are_marked(world):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    write_books(settings, no_books(markets, {"56-57°F": [[0.93, 100.0]]}))
+    conn.execute("DELETE FROM metar_obs WHERE first_seen_ms < ?", (SEEN,))      # nothing was seen of this day before 16:51Z
+    s = engine.process(conn, settings, engine.LIVE, T0, SEEN + 10_000)
+    assert s.measurements_planned == 5 * 4                                      # all five brackets below 58°F fall at once
+    assert {r[0] for r in conn.execute("SELECT first_of_day FROM paper_measurements")} == {1}
+    h2a.take_measurements(conn, BookHistory(settings, conn), engine.LIVE, SEEN + 10_000)
+    groups = report.build(conn)["h2a_ruled_out_brackets"]
+    assert groups["by_the_first_report_of_the_day"]["+0s"]["measured"] == 5 and groups["during_the_day"]["+0s"]["brackets"] == 0

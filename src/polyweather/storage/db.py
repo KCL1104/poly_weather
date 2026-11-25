@@ -300,6 +300,7 @@ CREATE TABLE IF NOT EXISTS paper_measurements (
     fillable_usd REAL,                    -- a quarter of every sell order priced below 1
     edge         REAL,                    -- 1 minus the cost of a share at the best ask, fee included
     fillable_at_threshold_usd REAL,       -- a quarter of the sell orders that still leave the ledger's 2pp after fees
+    first_of_day INTEGER,                 -- 1 if the trigger was the first counted report of its local day
     PRIMARY KEY (run, ledger, market_id, trigger, offset_s)
 );
 
@@ -349,8 +350,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Bring a database made by an earlier version up to the current tables."""
     if "seen_ms" not in {r[1] for r in conn.execute("PRAGMA table_info(lamp_hourly)")}:
         conn.execute("ALTER TABLE lamp_hourly ADD COLUMN seen_ms INTEGER")
-    if "fillable_at_threshold_usd" not in {r[1] for r in conn.execute("PRAGMA table_info(paper_measurements)")}:
+    have = {r[1] for r in conn.execute("PRAGMA table_info(paper_measurements)")}
+    if "fillable_at_threshold_usd" not in have:
         conn.execute("ALTER TABLE paper_measurements ADD COLUMN fillable_at_threshold_usd REAL")
+    if "first_of_day" not in have:
+        conn.execute("ALTER TABLE paper_measurements ADD COLUMN first_of_day INTEGER")
 
 
 def log_job(conn: sqlite3.Connection, job: str, ok: bool, detail: str = "") -> None:

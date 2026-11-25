@@ -15,6 +15,9 @@ import statistics
 from . import engine
 
 
+LATE_SEEN_MS = 15 * 60_000  # reports normally reach the archive 3 to 4 minutes after the observation
+
+
 def _median(values: list[float]) -> float | None:
     return round(statistics.median(values), 4) if values else None
 
@@ -64,14 +67,18 @@ def build(conn: sqlite3.Connection, run: str = engine.LIVE) -> dict:
 
     # A day's first report rules out every bracket far below the night's temperature at once; those
     # were never in play. The hypothesis is about brackets that fall during the day, so they are shown apart.
+    # A report this system only saw long after it was made (fetched again after an outage) says nothing
+    # about how fast the market reacts: by then it had all the time it wanted. Those are counted apart.
+    late = f"(p.seen_ms - CAST(strftime('%s', p.trigger) AS INTEGER) * 1000) > {LATE_SEEN_MS}"
     measures = {}
-    for label, clause in (("during_the_day", "p.trigger > d.first"), ("by_the_first_report_of_the_day", "p.trigger = d.first")):
+    for label, clause in (("during_the_day", f"COALESCE(p.first_of_day, 0) = 0 AND NOT {late}"),
+                          ("by_the_first_report_of_the_day", f"p.first_of_day = 1 AND NOT {late}"),
+                          ("report_seen_late", late)):
         group = {}
         for offset in conn.execute("SELECT DISTINCT offset_s FROM paper_measurements WHERE run=? ORDER BY 1", (run,)).fetchall():
             rows = conn.execute(
                 f"""SELECT p.status, p.best_ask, p.fillable_usd, p.fillable_at_threshold_usd, p.edge FROM paper_measurements p
-                    JOIN (SELECT event_id, MIN(trigger) AS first FROM paper_measurements WHERE run=? GROUP BY event_id) d ON d.event_id = p.event_id
-                    WHERE p.run=? AND p.ledger='H2a' AND p.offset_s=? AND {clause}""", (run, run, offset[0])
+                    WHERE p.run=? AND p.ledger='H2a' AND p.offset_s=? AND {clause}""", (run, offset[0])
             ).fetchall()
             ok = [r for r in rows if r["status"] == "ok"]
             with_ask = [r for r in ok if r["best_ask"] is not None]
@@ -109,7 +116,8 @@ def render(report: dict, as_json: bool = False) -> str:
                      f"without the 3 best city-days {c['pnl_without_top3_city_days_usd']}")
         o = e["optimistic"]
         lines.append(f"  optimistic fills (no delay, whole visible size): invested {o['invested_usd']}, settled profit {o['settled_pnl_usd']}")
-    for label, title in (("during_the_day", "ruled out during the day"), ("by_the_first_report_of_the_day", "ruled out by the day's first report")):
+    for label, title in (("during_the_day", "ruled out during the day"), ("by_the_first_report_of_the_day", "ruled out by the day's first report"),
+                         ("report_seen_late", "whose report was seen more than 15 minutes late (not part of the test)")):
         group = report["h2a_ruled_out_brackets"].get(label) or {}
         if not any(m["brackets"] for m in group.values()):
             continue

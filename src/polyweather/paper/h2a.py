@@ -48,15 +48,19 @@ def candidates(conn: sqlite3.Connection, city_day: CityDay, ts_ms: int) -> tuple
 def plan_measurements(conn: sqlite3.Connection, run: str, city_day: CityDay, ts_ms: int, trigger_obs: str) -> int:
     """Schedule the measurements for brackets that this very report ruled out."""
     now_out = {m["market_id"]: m for m in ruled_out(city_day, observed_high(conn, city_day, ts_ms).value_unit)}
-    before = {m["market_id"] for m in ruled_out(city_day, observed_high(conn, city_day, ts_ms - 1).value_unit)}
+    earlier = observed_high(conn, city_day, ts_ms - 1)
+    before = {m["market_id"] for m in ruled_out(city_day, earlier.value_unit)}
+    # The day's first report rules out, all at once, every bracket far below the night's temperature.
+    # Those were never in play, so they are marked and reported apart from brackets that fall during the day.
+    first_of_day = int(earlier.n_counted == 0)
     n = 0
     for market_id in now_out.keys() - before:
         for offset in MEASURE_OFFSETS_S:
             conn.execute(
                 """INSERT OR IGNORE INTO paper_measurements(run, ledger, event_id, market_id, station, obs_date, trigger, seen_ms,
-                       offset_s, at_ms, status) VALUES(?,?,?,?,?,?,?,?,?,?,'pending')""",
+                       offset_s, at_ms, status, first_of_day) VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?)""",
                 (run, RULES.name, city_day.event_id, market_id, city_day.station, city_day.obs_date, trigger_obs, ts_ms, offset,
-                 ts_ms + offset * 1000 + fills.LATENCY_MS),
+                 ts_ms + offset * 1000 + fills.LATENCY_MS, first_of_day),
             )
             n += 1
     return n
