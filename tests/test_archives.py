@@ -158,3 +158,14 @@ def test_metar_poller_fetches_again_what_a_long_outage_left_out(conn, monkeypatc
         assert ids == ["KLGA", "KORD"] and 7.9 / 24 <= days <= 8.2 / 24  # the outage plus two hours
     else:
         assert calls == []
+
+
+def test_metar_poller_closes_the_gap_a_killed_poller_left_open(conn, monkeypatch):
+    conn.execute("INSERT INTO gaps(source, key, start_ms, reason) VALUES('metar', 'awc', 1795500000000, 'no answer')")
+    conn.execute("INSERT INTO gaps(source, key, start_ms, reason) VALUES('book', 'conn:1', 1795500000000, 'not ours to close')")
+    monkeypatch.setattr(awc, "fetch_cache", lambda client, wanted: [])
+    monkeypatch.setattr(awc, "fetch_api", lambda client, ids, **kw: [])
+    monkeypatch.setattr(awc, "backfill", lambda conn_, client, ids, *, days: 0)
+    awc.poll_forever(conn, None, ["KLGA"], stop_after_s=0)
+    assert conn.execute("SELECT end_ms FROM gaps WHERE source='metar'").fetchone()[0] is not None
+    assert conn.execute("SELECT end_ms FROM gaps WHERE source='book'").fetchone()[0] is None

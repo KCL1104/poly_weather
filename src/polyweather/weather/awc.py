@@ -141,6 +141,8 @@ def poll_forever(
     started = time.monotonic()
     next_api = 0.0
     gap_open: int | None = None
+    # A poller that was killed during an outage left its gap open; it ended when this one took over.
+    conn.execute("UPDATE gaps SET end_ms=? WHERE source='metar' AND key='awc' AND end_ms IS NULL", (now_ms(),))
     # When this archive last received anything: the previous run's last report if there
     # is one, so that a restart after hours of downtime is treated like any other outage.
     last_ok_ms = _last_seen_ms(conn, wanted) or now_ms()

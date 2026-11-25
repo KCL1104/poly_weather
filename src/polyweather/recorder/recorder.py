@@ -320,6 +320,10 @@ class Recorder:
         frames it still held in memory, up to half a minute of them. A run that never
         wrote anything is missing from its own start.
         """
+        # A run that was killed while a connection was down could not close that gap. Left open,
+        # it would mark everything recorded from now on as untrustworthy. It ended, at the latest,
+        # now; the outage itself is covered by the restart gap written below.
+        self.db.execute("UPDATE gaps SET end_ms=? WHERE source='book' AND end_ms IS NULL", (now_ms(),))
         try:
             state = json.loads(self._state_path.read_text(encoding="utf-8"))
             last_alive = state["last_alive_ms"]

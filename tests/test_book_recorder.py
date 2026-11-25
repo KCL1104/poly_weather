@@ -322,3 +322,17 @@ def test_sink_removes_old_half_written_files_but_not_fresh_ones(tmp_path):
     os.utime(old, (long_ago, long_ago)); os.utime(other, (long_ago, long_ago))
     RollingParquetSink(tmp_path, "book", RAW_SCHEMA, "recv_ms")
     assert not old.exists() and fresh.exists() and other.exists()  # only this sink's own, only old ones
+
+
+def test_a_gap_left_open_by_a_killed_run_is_closed_when_the_next_one_starts(conn, recorder):
+    """Killed while a connection was down: nobody was left to close that gap."""
+    recorder._heartbeat()
+    conn.execute("INSERT INTO gaps(source, key, start_ms, reason) VALUES('book', 'conn:2', 1795500000000, 'disconnect')")
+    conn.execute("INSERT INTO gaps(source, key, start_ms, reason) VALUES('metar', 'awc', 1795500000000, 'not ours to close')")
+    successor = Recorder(recorder.settings, conn, connection_factory=FakeConnection)
+    successor._restart_gap()
+    assert conn.execute("SELECT COUNT(*) FROM gaps WHERE source='book' AND end_ms IS NULL").fetchone()[0] == 0
+    closed = conn.execute("SELECT end_ms FROM gaps WHERE key='conn:2'").fetchone()[0]
+    restart = conn.execute("SELECT end_ms FROM gaps WHERE reason='recorder restart'").fetchone()[0]
+    assert abs(closed - restart) < 1000                                 # it ends where the restart gap ends
+    assert conn.execute("SELECT end_ms FROM gaps WHERE source='metar'").fetchone()[0] is None
