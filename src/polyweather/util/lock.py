@@ -57,7 +57,7 @@ def hold(directory: Path, name: str) -> bool:
         _lock(handle)
     except OSError as e:
         handle.close()
-        if e.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK, errno.EDEADLK, errno.EDEADLOCK) or os.name == "nt":
+        if e.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK, errno.EDEADLK, getattr(errno, "EDEADLOCK", errno.EDEADLK)):
             raise Busy(str(path)) from None
         log.warning("cannot lock %s (%s): running without the single-instance check", path, e)
         return False
