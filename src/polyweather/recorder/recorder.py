@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 import sqlite3
 from dataclasses import dataclass, field
@@ -112,6 +113,7 @@ class Recorder:
         self._conn_tasks: dict[int, asyncio.Task] = {}
         self._asset_conn: dict[str, int] = {}
         self._seq = 0
+        self._heartbeat_failed = False
         self._open_gap: dict[int, int] = {}  # conn id -> gaps row id
         self._last_ok_check: dict[str, int] = {}
         self._pending_checks: dict[str, tuple[str, int, int]] = {}  # asset -> (rest hash, deadline ms, looks so far)
@@ -292,10 +294,20 @@ class Recorder:
             self._conns[cid].resync([asset])
 
     def _heartbeat(self) -> None:
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"last_alive_ms": now_ms(), "frames": self.stats.frames}), encoding="utf-8")
-        tmp.replace(self._state_path)
+        """Note that the recorder is alive. Losing one note is harmless, so a file that
+        is briefly locked (Windows: a reader or a virus scanner) or a full disk must
+        not take the recorder down."""
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._state_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"last_alive_ms": now_ms(), "frames": self.stats.frames}), encoding="utf-8")
+            os.replace(tmp, self._state_path)
+        except OSError as e:
+            if not self._heartbeat_failed:
+                log.warning("could not write the heartbeat file: %s", e)
+            self._heartbeat_failed = True
+        else:
+            self._heartbeat_failed = False
 
     def _restart_gap(self) -> None:
         """Log the outage between the previous run's last heartbeat and now."""

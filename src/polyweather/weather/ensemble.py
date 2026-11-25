@@ -20,6 +20,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..stations import Station
+from ..util.files import move_into_place
 from ..util.timeutil import UTC, now_ms
 
 
@@ -103,7 +104,7 @@ def store_samples(
         )
         tmp = path.with_suffix(".tmp")
         pq.write_table(table, tmp, compression="zstd")
-        tmp.replace(path)
+        move_into_place(tmp, path)
         conn.execute(
             """INSERT INTO forecast_fetches(source, model, run_init, fetched_ms, content_hash, path, n_stations)
                VALUES(?,?,?,?,?,?,?)""",

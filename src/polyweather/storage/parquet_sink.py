@@ -16,6 +16,7 @@ from typing import Sequence
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ..util.files import move_into_place
 from ..util.timeutil import UTC
 
 
@@ -81,7 +82,7 @@ class RollingParquetSink:
         table = pa.Table.from_arrays([pa.array(c, type=f.type) for c, f in zip(self._cols, self.schema)], schema=self.schema)
         tmp = path.with_suffix(".tmp")
         pq.write_table(table, tmp, compression="zstd", compression_level=self.compression_level)
-        tmp.replace(path)
+        move_into_place(tmp, path)
         self.rows_written += len(self)
         self.bytes_written += path.stat().st_size
         self._last_flush_ts = self._cols[self.ts_index][-1]

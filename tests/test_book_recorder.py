@@ -253,3 +253,18 @@ async def test_unknown_hash_with_identical_levels_is_not_a_mismatch(recorder, co
     assert (recorder.stats.checks_mismatch, recorder.stats.checks_recovered) == (0, 1)
     assert fc.resynced == [] and asset in recorder.state.books
     assert conn.execute("SELECT COUNT(*) FROM gaps").fetchone()[0] == 0
+
+
+def test_a_heartbeat_file_that_cannot_be_written_does_not_stop_the_recorder(recorder, monkeypatch):
+    from polyweather.recorder import recorder as rec_mod
+
+    def locked(a, b):
+        raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+
+    monkeypatch.setattr(rec_mod.os, "replace", locked)
+    recorder._heartbeat()
+    recorder._heartbeat()  # no exception, and only one warning for a run of failures
+    assert recorder._heartbeat_failed is True
+    monkeypatch.undo()
+    recorder._heartbeat()
+    assert recorder._heartbeat_failed is False and recorder._state_path.exists()

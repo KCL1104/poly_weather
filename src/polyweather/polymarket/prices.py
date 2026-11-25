@@ -19,6 +19,7 @@ import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ..util.files import move_into_place
 from ..util.http import request_with_retry
 from ..util.timeutil import UTC, now_ms, parse_iso
 
@@ -123,5 +124,5 @@ def archive_events(
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     pq.write_table(pa.Table.from_pydict(cols, schema=_SCHEMA), tmp, compression="zstd")
-    tmp.replace(path)
+    move_into_place(tmp, path)
     return n_tokens, path

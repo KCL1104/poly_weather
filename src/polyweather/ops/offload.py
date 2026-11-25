@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..settings import Settings
+from ..util.files import move_into_place
 from ..util.timeutil import ms_to_iso, now_ms
 
 log = logging.getLogger(__name__)
@@ -200,7 +201,7 @@ def backup_local(conn: sqlite3.Connection, settings: Settings, *, keep: int = 7)
     day = ms_to_iso(now_ms())[:10]
     final = settings.backup_dir / f"polyweather-{day}.sqlite.gz"
     with tempfile.TemporaryDirectory(dir=settings.backup_dir) as tmp:
-        _packed_copy(conn, Path(tmp)).replace(final)
+        move_into_place(_packed_copy(conn, Path(tmp)), final)
     copies = sorted(settings.backup_dir.glob("polyweather-*.sqlite.gz"))
     for old in copies[: max(0, len(copies) - max(1, keep))]:
         old.unlink()
