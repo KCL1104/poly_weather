@@ -1,5 +1,4 @@
 import asyncio
-import os
 import signal
 import subprocess
 import sys
@@ -29,7 +28,7 @@ def test_on_stop_reaches_the_callback_inside_the_loop(loop_factory):
         async def main():
             stopped = asyncio.Event()
             stop.on_stop(stopped.set, asyncio.get_running_loop())
-            os.kill(os.getpid(), signal.SIGTERM)
+            signal.raise_signal(signal.SIGTERM)  # os.kill would end the process outright on Windows
             await asyncio.wait_for(stopped.wait(), timeout=5)
             return True
 
