@@ -165,3 +165,24 @@ def test_first_boot_steps_only_on_an_empty_database(conn, nyc_event):
     assert "--history" in steps[0][0]
     scanner.ingest(conn, [nyc_event])
     assert supervisor.first_boot_steps(conn) == []
+
+
+def test_a_job_marked_for_start_up_runs_once_right_away_and_then_on_schedule(harness):
+    make, now, alerts, log = harness
+    prepare = Job("paper-prepare", ["exit", "0", str(log)], daily_utc=("03:40",), at_start=True)
+    regular = Job("catalog", ["exit", "0", str(log)], every_s=600)
+    sup = make([], [prepare, regular])
+    sup.tick()
+    assert prepare.process is not None and regular.process is None      # only the start-up job fires on the first pass
+    assert _wait(lambda: prepare.process.poll() is not None)
+    sup.tick()
+    assert log.count("exit") == 1
+    now[0] = dt.datetime(2026, 11, 25, 3, 40, 1, tzinfo=UTC)
+    sup.tick()
+    assert _wait(lambda: log.count("exit") >= 2)                          # ... and again at its daily time
+
+
+def test_default_jobs_include_the_paper_ledgers():
+    jobs = {j.name: j for j in supervisor.default_jobs(False)}
+    assert jobs["paper"].args == ["paper", "run"] and jobs["paper"].every_s == 600
+    assert jobs["paper-prepare"].at_start and jobs["paper-report"].daily_utc == ("13:05",)

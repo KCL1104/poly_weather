@@ -53,6 +53,7 @@ class Job:
     every_s: int | None = None  # run when (seconds since midnight UTC - offset) crosses a multiple of this
     offset_s: int = 0
     daily_utc: tuple[str, ...] = ()  # or at these HH:MM times every day
+    at_start: bool = False  # also run once when the supervisor starts
     process: subprocess.Popen | None = None
     last_slot: int | None = field(default=None)
 
@@ -74,6 +75,11 @@ def default_jobs(bucket_configured: bool, ensemble_source: str = "openmeteo") ->
         Job("prices", ["prices", "archive"], daily_utc=("00:40",)),
         Job("check-settlement", ["check", "settlement"], daily_utc=("00:15", "12:15")),
         Job("check-gaps", ["check", "gaps"], daily_utc=("00:30",)),
+        # Paper trading: the ledgers follow the recording a few minutes behind; the history
+        # the nowcast needs is fetched at start and topped up once a day.
+        Job("paper", ["paper", "run"], every_s=600, offset_s=540),
+        Job("paper-prepare", ["paper", "prepare"], daily_utc=("03:40",), at_start=True),
+        Job("paper-report", ["paper", "report"], daily_utc=("13:05",)),
     ]
     if bucket_configured:
         jobs.append(Job("offload", ["offload"], every_s=900, offset_s=60))  # also backs up the database
@@ -137,6 +143,9 @@ class Supervisor:
             slot = job.slot(now)
             if job.last_slot is None:
                 job.last_slot = slot  # do not fire everything at start-up
+                if job.at_start and not self.stopping:
+                    job.process = self._spawn(job.args)
+                    log.info("started job %s at start-up (pid %d)", job.name, job.process.pid)
                 continue
             if slot != job.last_slot and not self.stopping:
                 job.last_slot = slot

@@ -1,0 +1,10 @@
+[Unit]
+Description=polyweather: paper ledgers every 10 minutes
+
+[Timer]
+OnCalendar=*:9/10
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

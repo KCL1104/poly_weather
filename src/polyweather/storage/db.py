@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS lamp_hourly (
     fhr       INTEGER NOT NULL,
     tmp_f     INTEGER,
     dpt_f     INTEGER,
+    seen_ms   INTEGER,                  -- when this row was stored; NULL in archives older than the column
     PRIMARY KEY (station, cycle, valid_utc)
 );
 CREATE INDEX IF NOT EXISTS lamp_valid ON lamp_hourly(station, valid_utc);
@@ -229,6 +230,77 @@ CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Paper trading. `run` is 'live' for the ledger of record and 'replay:<obs date>' for the
+-- daily recomputation from scratch that the ledger is reconciled against.
+CREATE TABLE IF NOT EXISTS paper_signals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run           TEXT NOT NULL,
+    ledger        TEXT NOT NULL,          -- 'H2a' / 'H2b'
+    ts_ms         INTEGER NOT NULL,       -- when the system knew what triggered the signal
+    event_id      TEXT NOT NULL,
+    market_id     TEXT NOT NULL,
+    station       TEXT NOT NULL,
+    obs_date      TEXT NOT NULL,
+    side          TEXT NOT NULL,          -- the token that would be bought: 'YES' / 'NO'
+    model_prob    REAL,                   -- probability that this token pays 1
+    market_mid    REAL,                   -- midpoint of this token's book at the signal
+    best_bid      REAL,
+    best_bid_size REAL,
+    best_ask      REAL,
+    best_ask_size REAL,
+    edge          REAL,                   -- model_prob minus the cost of a share at the best ask, fee included
+    decision      TEXT NOT NULL,          -- 'enter' / 'skip'
+    skip_reason   TEXT,                   -- below_threshold / over_cap / no_liquidity / frozen / data_gap / not_best
+    model_version TEXT NOT NULL,
+    source_batch  TEXT,                   -- the report or forecast cycle behind the signal
+    detail        TEXT,                   -- JSON
+    UNIQUE (run, ledger, ts_ms, market_id, side)
+);
+CREATE INDEX IF NOT EXISTS paper_signals_day ON paper_signals(run, ledger, obs_date);
+
+CREATE TABLE IF NOT EXISTS paper_fills (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id  INTEGER NOT NULL REFERENCES paper_signals(id),
+    run        TEXT NOT NULL,
+    ledger     TEXT NOT NULL,
+    variant    TEXT NOT NULL,             -- 'conservative' (the one that counts) / 'optimistic'
+    fill_ms    INTEGER NOT NULL,
+    event_id   TEXT NOT NULL,
+    market_id  TEXT NOT NULL,
+    station    TEXT NOT NULL,
+    obs_date   TEXT NOT NULL,
+    side       TEXT NOT NULL,
+    shares     REAL NOT NULL,
+    avg_price  REAL NOT NULL,
+    notional   REAL NOT NULL,             -- sum of price x shares
+    fee        REAL NOT NULL,
+    levels     TEXT,                      -- JSON [[price, shares], ...]
+    payout     REAL,                      -- filled in when the market resolves: shares if the token won, else 0
+    settled_ms INTEGER,
+    UNIQUE (signal_id, variant)
+);
+CREATE INDEX IF NOT EXISTS paper_fills_day ON paper_fills(run, ledger, variant, obs_date);
+
+-- H2a: what a ruled-out bracket's NO side cost at fixed delays after the report was seen.
+CREATE TABLE IF NOT EXISTS paper_measurements (
+    run          TEXT NOT NULL,
+    ledger       TEXT NOT NULL,
+    event_id     TEXT NOT NULL,
+    market_id    TEXT NOT NULL,
+    station      TEXT NOT NULL,
+    obs_date     TEXT NOT NULL,
+    trigger      TEXT NOT NULL,           -- observation time of the report that ruled the bracket out
+    seen_ms      INTEGER NOT NULL,        -- when this system first saw that report
+    offset_s     INTEGER NOT NULL,        -- seconds after seen_ms
+    at_ms        INTEGER NOT NULL,
+    status       TEXT NOT NULL,           -- 'pending' / 'ok' / 'gap'
+    best_ask     REAL,
+    ask_size     REAL,
+    fillable_usd REAL,                    -- a quarter of every sell order priced below 1
+    edge         REAL,                    -- 1 minus the cost of a share at the best ask, fee included
+    PRIMARY KEY (run, ledger, market_id, trigger, offset_s)
+);
 """
 
 
@@ -242,7 +314,14 @@ def connect(path: Path | str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=60000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring a database made by an earlier version up to the current tables."""
+    if "seen_ms" not in {r[1] for r in conn.execute("PRAGMA table_info(lamp_hourly)")}:
+        conn.execute("ALTER TABLE lamp_hourly ADD COLUMN seen_ms INTEGER")
 
 
 def log_job(conn: sqlite3.Connection, job: str, ok: bool, detail: str = "") -> None:

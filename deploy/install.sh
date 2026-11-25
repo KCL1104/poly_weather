@@ -38,9 +38,12 @@ run metar backfill-awc --days 4
 # the new code (the recorder writes out what it holds and logs the pause as a gap)
 systemctl enable polyweather-recorder.service polyweather-metar.service
 systemctl restart polyweather-recorder.service polyweather-metar.service
-for t in catalog nbm lamp ensemble prices check-settlement check-gaps; do
+for t in catalog nbm lamp ensemble prices check-settlement check-gaps paper paper-prepare paper-report; do
   systemctl enable --now "polyweather-$t.timer"
 done
+
+# History the paper nowcast needs (a month of reports and LAMP cycles): fetch it now, in the background.
+systemctl start --no-block polyweather-paper-prepare.service
 
 echo
 echo "Installed. Useful commands:"

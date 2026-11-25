@@ -15,7 +15,8 @@ from dataclasses import dataclass
 
 import httpx
 
-from ..util.timeutil import UTC, iso, utcnow
+from ..util.http import request_with_retry
+from ..util.timeutil import UTC, iso, now_ms, utcnow
 from .guidance import Block, extract_blocks, fixed_fields, have_cycle, store_blocks, to_int
 
 log = logging.getLogger(__name__)
@@ -92,9 +93,9 @@ def archive_cycle(conn: sqlite3.Connection, client: httpx.Client, cycle: dt.date
             for b in blocks:
                 for row in parse_lav(b):
                     conn.execute(
-                        """INSERT OR IGNORE INTO lamp_hourly(station, cycle, valid_utc, fhr, tmp_f, dpt_f)
-                           VALUES(?,?,?,?,?,?)""",
-                        (row.station, iso(row.cycle), iso(row.valid), row.fhr, row.tmp_f, row.dpt_f),
+                        """INSERT OR IGNORE INTO lamp_hourly(station, cycle, valid_utc, fhr, tmp_f, dpt_f, seen_ms)
+                           VALUES(?,?,?,?,?,?,?)""",
+                        (row.station, iso(row.cycle), iso(row.valid), row.fhr, row.tmp_f, row.dpt_f, now_ms()),
                     )
             conn.execute("COMMIT")
         except BaseException:
@@ -137,3 +138,59 @@ def archive_recent(
             time.sleep(pause_s)
         t -= dt.timedelta(hours=1)
     return total
+
+
+IEM_MOS = "https://mesonet.agron.iastate.edu/cgi-bin/request/mos.py"
+
+
+def parse_iem_csv(text: str) -> list[LampRow]:
+    """LAMP rows from the IEM MOS archive (model LAV). IEM labels a cycle by its hour;
+    the bulletin of that hour is the HH:30 cycle of the NOMADS file names."""
+    import csv
+    import io
+
+    out = []
+    for row in csv.DictReader(io.StringIO(text)):
+        try:
+            runtime = dt.datetime.strptime(row["runtime"][:16], "%Y-%m-%d %H:%M").replace(tzinfo=UTC)
+            valid = dt.datetime.strptime(row["ftime"][:16], "%Y-%m-%d %H:%M").replace(tzinfo=UTC)
+        except (KeyError, ValueError):
+            continue
+        number = lambda v: int(float(v)) if v not in ("", None, "M") else None  # noqa: E731
+        try:
+            tmp, dpt = number(row.get("tmp")), number(row.get("dpt"))
+        except ValueError:
+            continue
+        fhr = round((valid - runtime).total_seconds() / 3600)
+        if fhr >= 1:
+            out.append(LampRow(row.get("station") or "", runtime + dt.timedelta(minutes=30), valid, fhr, tmp, dpt))
+    return out
+
+
+def backfill_iem(conn: sqlite3.Connection, client: httpx.Client, ids, *, days: float = 35.0, now: dt.datetime | None = None,
+                 pause_s: float = 1.5) -> int:
+    """Fill ``lamp_hourly`` with past cycles from the IEM archive: four a day for about a
+    month, every hour for about the last week. Only hourly temperatures are stored; the
+    cycles are history for the nowcast's error statistics and never trigger a decision."""
+    now = now or utcnow()
+    start, end = (now - dt.timedelta(days=days)).date(), now.date() + dt.timedelta(days=1)
+    total = 0
+    for station in ids:
+        chunk = start
+        while chunk < end:
+            chunk_end = min(end, chunk + dt.timedelta(days=16))
+            r = request_with_retry(client, "GET", IEM_MOS, retries=6, backoff=4.0, params={
+                "station": station, "model": "LAV", "sts": f"{chunk}T00:00Z", "ets": f"{chunk_end}T00:00Z", "format": "csv"})
+            rows = parse_iem_csv(r.text)
+            conn.execute("BEGIN")
+            for row in rows:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO lamp_hourly(station, cycle, valid_utc, fhr, tmp_f, dpt_f, seen_ms) VALUES(?,?,?,?,?,?,?)",
+                    (station, iso(row.cycle), iso(row.valid), row.fhr, row.tmp_f, row.dpt_f, now_ms()))
+                total += cur.rowcount
+            conn.execute("COMMIT")
+            chunk = chunk_end
+            time.sleep(pause_s)
+        log.info("lamp history %s done (%d new rows so far)", station, total)
+    return total
+

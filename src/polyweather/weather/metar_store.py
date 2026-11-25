@@ -65,8 +65,12 @@ def load_obs(
     end: dt.datetime,
     *,
     sources: tuple[str, ...] | None = None,
+    seen_until_ms: int | None = None,
 ) -> list[Obs]:
     """Reports for a station with start <= obs_time < end, as settlement inputs.
+
+    ``seen_until_ms`` limits the answer to what this system had seen by that moment,
+    which is what a decision made at that moment could have used.
 
     When one observation time has several versions, AWC-sourced text outranks IEM text
     and a later sighting outranks an earlier one, mirroring "the report the resolution
@@ -77,6 +81,9 @@ def load_obs(
     if sources:
         q += f" AND source IN ({','.join('?' * len(sources))})"
         args += list(sources)
+    if seen_until_ms is not None:
+        q += " AND first_seen_ms <= ?"
+        args.append(seen_until_ms)
     rows = conn.execute(q + " ORDER BY obs_time, first_seen_ms", args).fetchall()
     out = []
     for r in rows:

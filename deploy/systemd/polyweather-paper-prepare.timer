@@ -1,0 +1,10 @@
+[Unit]
+Description=polyweather: refresh the paper nowcast's history once a day and after boot
+
+[Timer]
+OnCalendar=*-*-* 03:40:00 UTC
+OnBootSec=3min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

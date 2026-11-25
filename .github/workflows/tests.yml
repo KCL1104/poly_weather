@@ -129,15 +129,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install with deploy/install.sh
         run: sudo ./deploy/install.sh
-      - name: Services are running and all seven timers are scheduled
+      - name: Services are running and all ten timers are scheduled
         run: |
           systemctl is-active polyweather-recorder.service polyweather-metar.service
           systemctl list-timers 'polyweather-*' --no-pager
-          test "$(systemctl list-timers 'polyweather-*' --no-pager | grep -c 'polyweather-.*\.timer')" = 7
+          test "$(systemctl list-timers 'polyweather-*' --no-pager | grep -c 'polyweather-.*\.timer')" = 10
       - name: Let it record, and run scheduled jobs once by hand
         run: |
           sleep 180
-          for job in catalog nbm lamp check-settlement; do
+          for job in catalog nbm lamp check-settlement paper paper-report; do
             sudo systemctl start polyweather-$job.service
             echo "$job: $(systemctl show polyweather-$job.service -p Result --value)"
           done

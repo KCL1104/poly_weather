@@ -225,6 +225,37 @@ def cmd_backup(args, settings, conn) -> int:
     return _job(conn, "backup", run)
 
 
+def cmd_paper(args, settings, conn) -> int:
+    from .paper import engine, report
+
+    if args.action == "run":
+        return _job(conn, "paper", lambda: engine.run_live(conn, settings).as_dict())
+    if args.action == "prepare":
+        # History the H2b nowcast needs for its error statistics: a month of reports and of LAMP cycles.
+        from .weather import awc, lamp
+
+        def prepare():
+            ids = _scope_ids(settings, us_only=True)
+            with make_client(settings.user_agent, timeout=120) as client:
+                return {"metar_new": awc.backfill(conn, client, ids, days=31), "lamp_new": lamp.backfill_iem(conn, client, ids, days=35)}
+
+        return _job(conn, "paper-prepare", prepare)
+    if args.action == "replay":
+        if not args.date:
+            print("--date YYYY-MM-DD (the observation date) is required", file=sys.stderr)
+            return 2
+        return _job(conn, "paper-replay", lambda: engine.replay_date(conn, settings, args.date).as_dict())
+    if args.action == "reconcile":
+        if not args.date:
+            print("--date YYYY-MM-DD (the observation date) is required", file=sys.stderr)
+            return 2
+        result = engine.reconcile(conn, settings, args.date)
+        print(json.dumps(result, indent=2))
+        return 0 if result["ok"] else 2
+    print(report.render(report.build(conn, run=args.run), as_json=args.json))
+    return 0
+
+
 def cmd_run_all(args, settings, conn) -> int:
     from .ops import offload, supervisor
 
@@ -310,6 +341,13 @@ def cmd_status(args, settings, conn) -> int:
         "last_jobs": {r["job"]: {"at": ms_to_iso(r["ts_ms"]), "ok": bool(r["ok"])} for r in conn.execute(
             "SELECT job, ts_ms, ok FROM job_runs WHERE id IN (SELECT MAX(id) FROM job_runs GROUP BY job)")},
     }
+    from .paper import report as paper_report
+
+    paper = paper_report.build(conn)
+    out["paper"] = {"processed_through": paper["processed_through"], **{
+        name: {"signals": e["signals"], "entered": e["entered"], "invested_usd": e["conservative"]["invested_usd"],
+               "settled_pnl_usd": e["conservative"]["settled_pnl_usd"], "paused": e["paused"]}
+        for name, e in paper["ledgers"].items()}}
     print(json.dumps(out, indent=2, ensure_ascii=False))
     return 0
 
@@ -348,7 +386,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.set_defaults(fn=cmd_nbm)
 
     c = sub.add_parser("lamp", help="archive LAMP station bulletins")
-    c.add_argument("action", choices=["archive"])
+    c.add_argument("action", choices=["archive", "backfill-iem"])
+    c.add_argument("--days", type=float, default=35, help="backfill-iem: how far back to fetch (default 35)")
     c.set_defaults(fn=cmd_lamp)
 
     c = sub.add_parser("ensemble", help="archive ensemble forecasts")
@@ -379,6 +418,13 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("backup", help="write a consistent, compressed copy of the database under <data>/backup")
     c.add_argument("--keep", type=int, default=7, help="how many daily copies to keep (default 7)")
     c.set_defaults(fn=cmd_backup)
+
+    c = sub.add_parser("paper", help="paper trading: advance the ledgers, replay a date, reconcile, report")
+    c.add_argument("action", choices=["run", "prepare", "replay", "reconcile", "report"])
+    c.add_argument("--date", help="observation date, YYYY-MM-DD (replay, reconcile)")
+    c.add_argument("--run", default="live", help="which run to report: live (default) or replay:<date>")
+    c.add_argument("--json", action="store_true", help="report as JSON")
+    c.set_defaults(fn=cmd_paper)
 
     c = sub.add_parser("run-all", help="run collectors and all scheduled jobs in one process tree (no systemd)")
     c.add_argument("--duration", type=float, default=None, help="stop after N seconds (for testing)")
