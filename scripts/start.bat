@@ -1,7 +1,7 @@
 @echo off
 rem Run the whole system without Docker on Windows. Sets itself up on first use.
-rem Stop it with Ctrl+C. Written carefully but not yet run on a real Windows machine;
-rem Docker (see compose.yaml) is the tested way.
+rem Stop it with Ctrl+C. The CI's live job runs this file on a real Windows machine
+rem (.github/workflows/tests.yml).
 setlocal
 cd /d "%~dp0.."
 

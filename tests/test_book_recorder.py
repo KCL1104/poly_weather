@@ -307,3 +307,18 @@ async def test_restart_gap_after_a_clean_stop_starts_at_the_last_frame(conn, rec
     successor = Recorder(recorder.settings, conn, connection_factory=FakeConnection)
     successor._restart_gap()
     assert _restart_gap_start(conn) == 1_795_500_200_000
+
+
+def test_sink_removes_old_half_written_files_but_not_fresh_ones(tmp_path):
+    import os, time
+    from polyweather.recorder.recorder import RAW_SCHEMA
+
+    day = tmp_path / "date=2026-11-25"
+    day.mkdir()
+    old, fresh, other = day / "book-1-99-000003.tmp", day / "book-2-99-000004.tmp", day / "snap-1-99-000001.tmp"
+    for f in (old, fresh, other):
+        f.write_bytes(b"partial")
+    long_ago = time.time() - 3600
+    os.utime(old, (long_ago, long_ago)); os.utime(other, (long_ago, long_ago))
+    RollingParquetSink(tmp_path, "book", RAW_SCHEMA, "recv_ms")
+    assert not old.exists() and fresh.exists() and other.exists()  # only this sink's own, only old ones

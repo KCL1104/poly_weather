@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -46,6 +47,22 @@ class RollingParquetSink:
         self.rows_written = 0
         self.bytes_written = 0
         self.flushed_through: int | None = None  # timestamp of the last row that is on disk
+        self._drop_stale_tmp()
+
+    def _drop_stale_tmp(self, older_than_s: float = 600.0) -> None:
+        """Remove half-written files a crashed writer left behind (full disk, power cut).
+
+        They are never read, but they take space, and on a full disk that matters.
+        """
+        if not self.root.exists():
+            return
+        cutoff = time.time() - older_than_s
+        for leftover in self.root.rglob(f"{self.prefix}-*.tmp"):
+            try:
+                if leftover.stat().st_mtime < cutoff:
+                    leftover.unlink()
+            except OSError:
+                pass
 
     @staticmethod
     def _date(ts_ms: int) -> str:
