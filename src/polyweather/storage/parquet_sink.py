@@ -45,6 +45,7 @@ class RollingParquetSink:
         self._n_files = 0
         self.rows_written = 0
         self.bytes_written = 0
+        self.flushed_through: int | None = None  # timestamp of the last row that is on disk
 
     @staticmethod
     def _date(ts_ms: int) -> str:
@@ -82,10 +83,13 @@ class RollingParquetSink:
         table = pa.Table.from_arrays([pa.array(c, type=f.type) for c, f in zip(self._cols, self.schema)], schema=self.schema)
         tmp = path.with_suffix(".tmp")
         pq.write_table(table, tmp, compression="zstd", compression_level=self.compression_level)
+        with open(tmp, "rb+") as f:
+            os.fsync(f.fileno())  # on disk before it gets its final name: a power cut must not leave a hollow file
         move_into_place(tmp, path)
         self.rows_written += len(self)
         self.bytes_written += path.stat().st_size
         self._last_flush_ts = self._cols[self.ts_index][-1]
+        self.flushed_through = self._last_flush_ts
         self._cols = [[] for _ in self.schema]
         self._first_ts = None
         return path

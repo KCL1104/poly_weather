@@ -114,6 +114,7 @@ class Recorder:
         self._asset_conn: dict[str, int] = {}
         self._seq = 0
         self._heartbeat_failed = False
+        self._started_ms = now_ms()
         self._open_gap: dict[int, int] = {}  # conn id -> gaps row id
         self._last_ok_check: dict[str, int] = {}
         self._pending_checks: dict[str, tuple[str, int, int]] = {}  # asset -> (rest hash, deadline ms, looks so far)
@@ -300,7 +301,9 @@ class Recorder:
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._state_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"last_alive_ms": now_ms(), "frames": self.stats.frames}), encoding="utf-8")
+            state = {"started_ms": self._started_ms, "last_alive_ms": now_ms(), "frames": self.stats.frames,
+                     "flushed_through_ms": self.raw.flushed_through}
+            tmp.write_text(json.dumps(state), encoding="utf-8")
             os.replace(tmp, self._state_path)
         except OSError as e:
             if not self._heartbeat_failed:
@@ -310,14 +313,22 @@ class Recorder:
             self._heartbeat_failed = False
 
     def _restart_gap(self) -> None:
-        """Log the outage between the previous run's last heartbeat and now."""
+        """Log the outage between the previous run and now.
+
+        The gap starts at the last frame the previous run got onto the disk, not at its
+        last sign of life: a run that was killed outright (power cut, kill -9) loses the
+        frames it still held in memory, up to half a minute of them. A run that never
+        wrote anything is missing from its own start.
+        """
         try:
-            last = json.loads(self._state_path.read_text(encoding="utf-8"))["last_alive_ms"]
+            state = json.loads(self._state_path.read_text(encoding="utf-8"))
+            last_alive = state["last_alive_ms"]
         except (OSError, ValueError, KeyError):
             return
+        start = state.get("flushed_through_ms") or state.get("started_ms") or last_alive
         self.db.execute(
             "INSERT INTO gaps(source, key, start_ms, end_ms, reason) VALUES('book', 'process', ?, ?, 'recorder restart')",
-            (last, now_ms()),
+            (min(start, last_alive), now_ms()),
         )
 
     # ---- main loop -----------------------------------------------------------------

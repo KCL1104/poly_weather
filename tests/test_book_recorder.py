@@ -268,3 +268,42 @@ def test_a_heartbeat_file_that_cannot_be_written_does_not_stop_the_recorder(reco
     monkeypatch.undo()
     recorder._heartbeat()
     assert recorder._heartbeat_failed is False and recorder._state_path.exists()
+
+
+def _restart_gap_start(conn):
+    return conn.execute("SELECT start_ms FROM gaps WHERE reason='recorder restart' ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+
+async def test_restart_gap_starts_at_the_last_frame_on_disk_not_the_last_sign_of_life(tmp_path, conn, recorder):
+    """A run killed outright loses the frames it still held in memory."""
+    recorder._sync_universe()
+    fc = FakeConnection.instances[0]
+    asset = sorted(fc.assets)[0]
+    fc.on_frame(1_795_500_000_000, 1, json.dumps([book(asset, [("0.40", "100")], [], h="a")]))
+    recorder.raw.flush()                                    # this frame is on disk
+    fc.on_frame(1_795_500_020_000, 1, json.dumps(change(asset, "0.41", "7", "BUY", "b")))  # this one is not
+    recorder._heartbeat()                                   # ... and then the power goes
+
+    successor = Recorder(recorder.settings, conn, connection_factory=FakeConnection)
+    successor._restart_gap()
+    assert _restart_gap_start(conn) == 1_795_500_000_000
+
+
+def test_restart_gap_of_a_run_that_wrote_nothing_starts_when_that_run_started(conn, recorder):
+    recorder._started_ms = 1_795_500_100_000
+    recorder._heartbeat()                                   # alive, but killed before its first flush
+    successor = Recorder(recorder.settings, conn, connection_factory=FakeConnection)
+    successor._restart_gap()
+    assert _restart_gap_start(conn) == 1_795_500_100_000
+
+
+async def test_restart_gap_after_a_clean_stop_starts_at_the_last_frame(conn, recorder):
+    recorder._sync_universe()
+    fc = FakeConnection.instances[0]
+    asset = sorted(fc.assets)[0]
+    fc.on_frame(1_795_500_200_000, 1, json.dumps([book(asset, [("0.40", "100")], [], h="a")]))
+    recorder.raw.close()                                    # what a clean shutdown does
+    recorder._heartbeat()
+    successor = Recorder(recorder.settings, conn, connection_factory=FakeConnection)
+    successor._restart_gap()
+    assert _restart_gap_start(conn) == 1_795_500_200_000
