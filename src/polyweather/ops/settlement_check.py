@@ -26,6 +26,11 @@ log = logging.getLogger(__name__)
 MIN_REPORTS = 20
 AWC_SOURCES = ("awc_api", "awc_cache")
 EDGE = dt.timedelta(minutes=90)  # an archive "spans" a day if it has reports this close to both ends
+# A day is judged only when no stretch of it longer than this lacks a routine report.
+# Hourly and half-hourly stations leave holes of 30 to 70 minutes; one missing report
+# makes about two hours. Longer holes mean the archive is incomplete (the computer was
+# off, or the archive starts mid-day), and the extreme may have fallen inside.
+MAX_HOLE_MIN = 180.0
 
 
 @dataclass
@@ -66,7 +71,8 @@ def check_event(conn: sqlite3.Connection, event_id: str, *, sources: tuple[str, 
         else:
             s, used = settle(spec, load_obs(conn, spec.station, day_start, day_end)), "all"
     rebuilt = None
-    if s.value_unit is not None and s.n_counted >= MIN_REPORTS:
+    complete = s.n_counted >= MIN_REPORTS and s.largest_hole_min is not None and s.largest_hole_min <= MAX_HOLE_MIN
+    if s.value_unit is not None and complete:
         idx = next((i for i, (_, b) in enumerate(markets) if b.contains(s.value_unit)), None)
         rebuilt = markets[idx][1].label if idx is not None else None
 
@@ -84,7 +90,8 @@ def check_event(conn: sqlite3.Connection, event_id: str, *, sources: tuple[str, 
         "is_match": is_match,
         "detail": json.dumps(
             {"n_reports": s.n_reports, "deciding": list(s.deciding)[:3], "too_few_reports": s.n_counted < MIN_REPORTS,
-             "sources": used}
+             "largest_hole_min": None if s.largest_hole_min is None else round(s.largest_hole_min),
+             "incomplete_day": not complete, "sources": used}
         ),
     }
     conn.execute(

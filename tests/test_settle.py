@@ -36,6 +36,21 @@ def test_real_market_rebuilds_to_the_bracket_that_resolved_yes(nyc_event, fixtur
     assert s.deciding_time == dt.datetime(2026, 11, 9, 16, 51, tzinfo=UTC)
 
 
+def test_largest_hole_covers_the_start_the_middle_and_the_end_of_the_day(nyc_event, fixtures):
+    spec = _spec(nyc_event)
+    obs = _obs_from_awc((fixtures / "awc_klga_2026-11-09.txt").read_text(), 2026, 11)
+    whole = settle(spec, obs)
+    assert 55 <= whole.largest_hole_min <= 70  # hourly reports, nothing missing
+    day_start, day_end = spec.local_day_bounds_utc()
+    late_start = [o for o in obs if o.obs_time >= day_start + dt.timedelta(hours=6)]
+    assert 360 <= settle(spec, late_start).largest_hole_min <= 420
+    early_end = [o for o in obs if o.obs_time < day_end - dt.timedelta(hours=5)]
+    assert 300 <= settle(spec, early_end).largest_hole_min <= 360
+    # the running value during the day looks no further than "now"
+    noon = day_start + dt.timedelta(hours=12)
+    assert settle(spec, obs, until=noon).largest_hole_min <= 70
+
+
 def _mk(spec_day_hour_utc: int, minute: int, text: str, order: int = 0, label=None) -> Obs:
     return Obs(dt.datetime(2026, 11, 9, spec_day_hour_utc, minute, tzinfo=UTC), text, label, order)
 

@@ -34,6 +34,10 @@ class Settlement:
     value_unit: int | None  # whole degrees in the market's unit
     deciding: tuple[str, ...] = ()  # raw text of the report(s) holding the extreme
     deciding_time: dt.datetime | None = None  # earliest obs time that reached the extreme
+    # Longest stretch of the day (up to ``until``) with no counted report, in minutes:
+    # from the start of the day, between reports, and to the end. A day with a long
+    # hole can have missed its extreme.
+    largest_hole_min: float | None = None
 
 
 def to_whole_unit(tenths_c: int, unit: str) -> int:
@@ -88,6 +92,8 @@ def settle(spec: ResolutionSpec, observations: Iterable[Obs], *, until: dt.datet
     pick = max if spec.measure == "high" else min
     extreme = pick(t for t, _ in counted)
     holders = sorted((o for t, o in counted if t == extreme), key=lambda o: o.obs_time)
+    end = day_end if until is None else min(day_end, until)
+    edges = [day_start, *sorted(o.obs_time for _, o in counted), end]
     return Settlement(
         n_reports=len(latest),
         n_counted=len(counted),
@@ -95,6 +101,7 @@ def settle(spec: ResolutionSpec, observations: Iterable[Obs], *, until: dt.datet
         value_unit=to_whole_unit(extreme, spec.unit or ""),
         deciding=tuple(o.raw_text for o in holders),
         deciding_time=holders[0].obs_time,
+        largest_hole_min=max((b - a).total_seconds() for a, b in zip(edges, edges[1:])) / 60,
     )
 
 

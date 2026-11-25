@@ -110,6 +110,19 @@ def backfill(
     return total
 
 
+CATCH_UP_AFTER_H = 2.5  # the regular API pass covers the last three hours
+MAX_CATCH_UP_DAYS = 29.0  # about what the API still serves
+
+
+def _last_seen_ms(conn: sqlite3.Connection, wanted: set[str]) -> int | None:
+    """When the newest AWC report of these stations was first seen, or None."""
+    marks = ",".join("?" * len(wanted))
+    row = conn.execute(
+        f"SELECT MAX(first_seen_ms) FROM metar_obs WHERE source LIKE 'awc%' AND station IN ({marks})", sorted(wanted)
+    ).fetchone()
+    return row[0] if row and row[0] else None
+
+
 def poll_forever(
     conn: sqlite3.Connection,
     client: httpx.Client,
@@ -128,11 +141,20 @@ def poll_forever(
     started = time.monotonic()
     next_api = 0.0
     gap_open: int | None = None
-    last_ok_ms = now_ms()
+    # When this archive last received anything: the previous run's last report if there
+    # is one, so that a restart after hours of downtime is treated like any other outage.
+    last_ok_ms = _last_seen_ms(conn, wanted) or now_ms()
     while True:
         tick = time.monotonic()
         try:
             new = store(conn, fetch_cache(client, wanted), "awc_cache")
+            silent_h = (now_ms() - last_ok_ms) / 3_600_000
+            if silent_h > CATCH_UP_AFTER_H:
+                # Off, asleep or offline for longer than the regular API pass looks back:
+                # fetch the whole stretch, or the day's settlement value could be missed.
+                days = min(MAX_CATCH_UP_DAYS, (silent_h + 2) / 24)
+                log.warning("metar: nothing received for %.1f hours; fetching the last %.1f days again", silent_h, days)
+                new += backfill(conn, client, list(ids), days=days)
             if tick >= next_api:
                 rows: list[MetarRow] = []
                 for i in range(0, len(ids), 40):

@@ -138,3 +138,23 @@ def test_cli_smoke(tmp_path, monkeypatch, capsys):
     assert cli.main(["check", "streak", "--date", "2026-11-23"]) == 0
     assert cli.main(["nbm", "backfill"]) == 2  # dates are required
     assert db.connect(tmp_path / "db" / "polyweather.sqlite").execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("hours_silent, expect_catch_up", [(0.5, False), (6.0, True)])
+def test_metar_poller_fetches_again_what_a_long_outage_left_out(conn, monkeypatch, hours_silent, expect_catch_up):
+    from polyweather.util.timeutil import now_ms
+
+    seen = now_ms() - int(hours_silent * 3_600_000)
+    store(conn, [MetarRow("KLGA", dt.datetime(2026, 11, 24, 9, 51, tzinfo=UTC),
+                          "METAR KLGA 240951Z 30017G22KT 10SM FEW100 08/M01 A3018 RMK AO2 T00781006", "METAR")],
+          "awc_api", seen_ms=seen)
+    calls = []
+    monkeypatch.setattr(awc, "fetch_cache", lambda client, wanted: [])
+    monkeypatch.setattr(awc, "fetch_api", lambda client, ids, **kw: [])
+    monkeypatch.setattr(awc, "backfill", lambda conn_, client, ids, *, days: calls.append((list(ids), days)) or 0)
+    awc.poll_forever(conn, None, ["KLGA", "KORD"], stop_after_s=0)
+    if expect_catch_up:
+        (ids, days), = calls
+        assert ids == ["KLGA", "KORD"] and 7.9 / 24 <= days <= 8.2 / 24  # the outage plus two hours
+    else:
+        assert calls == []

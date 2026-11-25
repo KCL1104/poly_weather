@@ -5,6 +5,7 @@ from polyweather.ops import settlement_check
 from polyweather.weather.metar_store import MetarRow, load_obs, store
 
 import datetime as dt
+import json
 import re
 
 UTC = dt.timezone.utc
@@ -140,6 +141,27 @@ def test_settlement_check_does_not_judge_a_day_with_too_few_reports(conn, nyc_ev
     assert (s.matched, s.mismatched, s.no_data) == (0, 0, 1)
     assert not scanner.is_frozen(conn, "KLGA")
     assert '"too_few_reports": true' in conn.execute("SELECT detail FROM settlement_checks").fetchone()[0]
+
+
+def test_settlement_check_does_not_judge_a_day_with_a_long_hole(conn, nyc_event, fixtures):
+    """Seen on 2026-11-25: the archive began mid-day, twenty reports were there, the
+    day's extreme was not, and the half day was judged as a mismatch."""
+    scanner.ingest(conn, [nyc_event])
+    rows = []
+    for line in (fixtures / "awc_klga_2026-11-09.txt").read_text().splitlines():
+        d, h, mi = map(int, re.search(r"(\d{2})(\d{2})(\d{2})Z", line).groups())
+        when = dt.datetime(2026, 11, d, h, mi, tzinfo=UTC)
+        # the computer was off from 14:00Z to 18:00Z, across the warmest report (16:51Z)
+        if not (dt.datetime(2026, 11, 9, 14, tzinfo=UTC) <= when < dt.datetime(2026, 11, 9, 18, tzinfo=UTC)):
+            rows.append(MetarRow("KLGA", when, line.strip(), "METAR"))
+    store(conn, rows, "awc_api")
+    s = settlement_check.run(conn, since="2026-11-09", until="2026-11-09", freeze_on_mismatch=True)
+    assert (s.matched, s.mismatched, s.no_data) == (0, 0, 1)
+    assert not scanner.is_frozen(conn, "KLGA")
+    row = conn.execute("SELECT n_counted, detail FROM settlement_checks").fetchone()
+    detail = json.loads(row["detail"])
+    assert row["n_counted"] == 20 and detail["incomplete_day"] is True and detail["too_few_reports"] is False
+    assert 290 <= detail["largest_hole_min"] <= 310  # 13:51Z to 18:51Z
 
 
 def test_awc_text_outranks_iem_text_for_the_same_observation(conn):
