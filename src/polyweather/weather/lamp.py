@@ -87,15 +87,18 @@ def archive_cycle(conn: sqlite3.Connection, client: httpx.Client, cycle: dt.date
         if r.status_code != 200:
             return None if product == "lav" else total
         blocks = [b for b in extract_blocks(r.content, wanted) if b.cycle == cycle]
+        # One time stamp for the bulletin and its parsed rows: the paper engine decides "as of" the moment a
+        # cycle was archived and must find that cycle's own rows there, not a few milliseconds later.
+        stored_ms = now_ms()
         conn.execute("BEGIN")
         try:
-            total += store_blocks(conn, product, blocks, "nomads", r.headers.get("last-modified"))
+            total += store_blocks(conn, product, blocks, "nomads", r.headers.get("last-modified"), fetched_ms=stored_ms)
             for b in blocks:
                 for row in parse_lav(b):
                     conn.execute(
                         """INSERT OR IGNORE INTO lamp_hourly(station, cycle, valid_utc, fhr, tmp_f, dpt_f, seen_ms)
                            VALUES(?,?,?,?,?,?,?)""",
-                        (row.station, iso(row.cycle), iso(row.valid), row.fhr, row.tmp_f, row.dpt_f, now_ms()),
+                        (row.station, iso(row.cycle), iso(row.valid), row.fhr, row.tmp_f, row.dpt_f, stored_ms),
                     )
             conn.execute("COMMIT")
         except BaseException:

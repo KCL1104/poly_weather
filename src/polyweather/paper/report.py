@@ -69,7 +69,7 @@ def build(conn: sqlite3.Connection, run: str = engine.LIVE) -> dict:
         group = {}
         for offset in conn.execute("SELECT DISTINCT offset_s FROM paper_measurements WHERE run=? ORDER BY 1", (run,)).fetchall():
             rows = conn.execute(
-                f"""SELECT p.status, p.best_ask, p.fillable_usd, p.edge FROM paper_measurements p
+                f"""SELECT p.status, p.best_ask, p.fillable_usd, p.fillable_at_threshold_usd, p.edge FROM paper_measurements p
                     JOIN (SELECT event_id, MIN(trigger) AS first FROM paper_measurements WHERE run=? GROUP BY event_id) d ON d.event_id = p.event_id
                     WHERE p.run=? AND p.ledger='H2a' AND p.offset_s=? AND {clause}""", (run, run, offset[0])
             ).fetchall()
@@ -82,6 +82,7 @@ def build(conn: sqlite3.Connection, run: str = engine.LIVE) -> dict:
                 "median_best_ask": _median([r["best_ask"] for r in with_ask]),
                 "median_edge_after_fee": _median([r["edge"] for r in with_ask]),
                 "median_buyable_usd": _median([r["fillable_usd"] or 0.0 for r in ok]),
+                "median_buyable_with_2pp_edge_usd": _median([r["fillable_at_threshold_usd"] or 0.0 for r in ok]),
                 "share_with_edge_2pp": round(sum(1 for r in with_ask if r["edge"] >= 0.02) / len(ok), 4) if ok else None,
             }
         measures[label] = group
@@ -116,7 +117,8 @@ def render(report: dict, as_json: bool = False) -> str:
         for k, m in group.items():
             lines.append(f"  {k:>6}: {m['measured']} measured ({m['pending']} pending, {m['in_recording_gap']} in a gap, {m['nobody_selling_no']} with no seller); "
                          f"median ask {m['median_best_ask']}, median edge after fee {m['median_edge_after_fee']}, "
-                         f"median buyable {m['median_buyable_usd']} USD, share with 2pp edge {m['share_with_edge_2pp']}")
+                         f"median buyable {m['median_buyable_usd']} USD at any price below 1, "
+                         f"{m['median_buyable_with_2pp_edge_usd']} USD with 2pp left; share with 2pp edge {m['share_with_edge_2pp']}")
     for side, m in (report.get("bracket_sets") or {}).items():
         what = "YES of every bracket (pays 1)" if side == "YES" else "NO of every bracket on offer (pays their number - 1)"
         lines.append(f"\nset of {what}: {m['city_day_snapshots_checked']} city-day snapshots checked, "

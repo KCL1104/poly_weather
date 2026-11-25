@@ -16,9 +16,11 @@ settlement. Pauses are read from the pause log as of the trigger's time.
 from __future__ import annotations
 
 import datetime as dt
+import itertools
 import json
 import logging
 import sqlite3
+import time
 from dataclasses import dataclass, field
 
 from .. import stations
@@ -31,7 +33,6 @@ log = logging.getLogger(__name__)
 
 LIVE = "live"
 LAG_MS = 180_000  # stay this far behind the recording: a lost connection is logged as a gap within a minute
-STALE_RECORDER_MS = 180_000
 RECONCILE_TOLERANCE_USD = 1.0
 DRAWDOWN_SHARE = 0.25
 LEDGERS = {h2a.RULES.name: h2a.RULES, h2b.RULES.name: h2b.RULES}
@@ -61,17 +62,26 @@ class RunSummary:
 
 
 def horizon_ms(settings: Settings, now: int | None = None) -> int:
-    """The latest moment the engine may decide about: safely behind what the recorder has on disk."""
+    """The latest moment the engine may decide about: safely behind what the recorder has on disk.
+
+    Never past the recorder's last flush, whether it is running or not. A recorder that
+    has stopped or hangs has not yet logged the hole it is leaving (it does that when it
+    starts again), so until then the last books it wrote would pass for current ones.
+    The engine waits there and catches up after the restart.
+    """
     now = now or now_ms()
-    try:
-        state = json.loads((settings.state_dir / "recorder.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        state = {}
-    alive, flushed = state.get("last_alive_ms"), state.get("flushed_through_ms")
-    if alive and flushed and now - alive < STALE_RECORDER_MS:
+    state: dict = {}
+    for _attempt in range(5):  # the file is replaced every few seconds; on Windows a read can collide with that
+        try:
+            state = json.loads((settings.state_dir / "recorder.json").read_text(encoding="utf-8"))
+            break
+        except (OSError, ValueError):
+            time.sleep(0.1)
+    flushed = state.get("flushed_through_ms")
+    if flushed:
         return min(now, flushed) - LAG_MS
-    # Recorder not running: nothing new will be written for the time already past, and
-    # what is missing shows up as a hole in the recording when a decision is attempted.
+    # No flush on record: the recorder has never run, or it started within the last seconds and
+    # has already logged the hole before its start. Whatever is missing shows up as a hole.
     return now - LAG_MS
 
 
@@ -161,21 +171,30 @@ def _set_cursor(conn: sqlite3.Connection, value: int) -> None:
 
 
 def process(conn: sqlite3.Connection, settings: Settings, run: str, after_ms: int, until_ms: int,
-            only_date: str | None = None, books: BookHistory | None = None) -> RunSummary:
-    """Work through every trigger seen in (after_ms, until_ms] for one run label."""
+            only_date: str | None = None, books: BookHistory | None = None, move_cursor: bool = False) -> RunSummary:
+    """Work through every trigger seen in (after_ms, until_ms] for one run label.
+
+    Everything that happened at one moment is written in one transaction, together with
+    the cursor when ``move_cursor`` is set. A run that is killed half way therefore
+    continues exactly where it stopped and never handles a trigger twice.
+    """
     books = books or BookHistory(settings, conn)
     s = RunSummary(run=run, from_ms=after_ms, to_ms=until_ms)
     triggers = [(ts, 0, station, reports) for ts, station, reports in metar_triggers(conn, after_ms, until_ms)]
     triggers += [(ts, 1, station, cycle) for ts, station, cycle in lamp_triggers(conn, after_ms, until_ms)]
-    for ts, kind, station, payload in sorted(triggers, key=lambda t: (t[0], t[1], t[2])):
+    triggers.sort(key=lambda t: (t[0], t[1], t[2]))
+    for ts, same_moment in itertools.groupby(triggers, key=lambda t: t[0]):
         conn.execute("BEGIN")
         try:
-            if kind == 0:
-                _handle_metar(conn, books, run, ts, station, payload, only_date, s)
-            else:
-                _handle_lamp(conn, books, run, ts, station, payload, only_date, s)
+            for _ts, kind, station, payload in same_moment:
+                if kind == 0:
+                    _handle_metar(conn, books, run, ts, station, payload, only_date, s)
+                else:
+                    _handle_lamp(conn, books, run, ts, station, payload, only_date, s)
+            if move_cursor:
+                _set_cursor(conn, ts)
             conn.execute("COMMIT")
-        except Exception:
+        except BaseException:
             conn.execute("ROLLBACK")
             raise
     return s
@@ -194,7 +213,7 @@ def run_live(conn: sqlite3.Connection, settings: Settings, now: int | None = Non
     if until <= after:
         s = RunSummary(run=LIVE, from_ms=after, to_ms=after, notes=["nothing new the recording covers yet"])
     else:
-        s = process(conn, settings, LIVE, after, until, books=books)
+        s = process(conn, settings, LIVE, after, until, books=books, move_cursor=True)
         _set_cursor(conn, until)
     s.measurements_taken = h2a.take_measurements(conn, books, LIVE, until)
     s.notes.append("bracket sets: " + json.dumps(sets.scan(conn, books, until)))

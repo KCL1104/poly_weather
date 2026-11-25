@@ -19,7 +19,7 @@ from ..resolution.settle import settle
 from ..weather.metar_store import load_obs
 from . import fills
 from .books import BookHistory, asks_of
-from .ledger import Candidate, CityDay, LedgerRules
+from .ledger import ASSUMED_FEE_RATE, Candidate, CityDay, LedgerRules
 
 RULES = LedgerRules(name="H2a", model_version="h2a-1", min_edge=0.02, max_trade_usd=10.0)
 MEASURE_OFFSETS_S = (0, 60, 300, 900)
@@ -65,7 +65,7 @@ def plan_measurements(conn: sqlite3.Connection, run: str, city_day: CityDay, ts_
 def take_measurements(conn: sqlite3.Connection, books: BookHistory, run: str, horizon_ms: int) -> int:
     """Fill in the measurements whose moment the recording now covers."""
     rows = conn.execute(
-        """SELECT p.rowid AS rid, p.market_id, p.at_ms, m.no_token, m.fee_rate FROM paper_measurements p
+        """SELECT p.rowid AS rid, p.market_id, p.at_ms, m.no_token, m.fee_rate, m.tick_size FROM paper_measurements p
            JOIN markets m ON m.market_id = p.market_id
            WHERE p.run=? AND p.ledger=? AND p.status='pending' AND p.at_ms<=? ORDER BY p.at_ms""",
         (run, RULES.name, horizon_ms),
@@ -76,11 +76,16 @@ def take_measurements(conn: sqlite3.Connection, books: BookHistory, run: str, ho
             conn.execute("UPDATE paper_measurements SET status='gap' WHERE rowid=?", (r["rid"],))
             continue
         asks = [(p, s) for p, s in asks_of(book) if p < 1.0]
-        rate = float(r["fee_rate"] or 0.0)
+        rate = ASSUMED_FEE_RATE if r["fee_rate"] is None else float(r["fee_rate"])
         best = asks[0] if asks else (None, None)
+        # The falsification test asks how much could be bought. Counted twice: everything below 1 (the
+        # sell orders parked at 0.999 included), and only what still leaves the ledger's threshold.
+        limit = fills.limit_price(1.0, RULES.min_edge, rate, float(r["tick_size"] or 0.001))
+        within = 0.0 if limit is None else sum(p * s * fills.LEVEL_SHARE for p, s in asks if p <= limit + 1e-12)
         conn.execute(
-            "UPDATE paper_measurements SET status='ok', best_ask=?, ask_size=?, fillable_usd=?, edge=? WHERE rowid=?",
+            """UPDATE paper_measurements SET status='ok', best_ask=?, ask_size=?, fillable_usd=?, edge=?, fillable_at_threshold_usd=?
+               WHERE rowid=?""",
             (best[0], best[1], sum(p * s * fills.LEVEL_SHARE for p, s in asks),
-             None if best[0] is None else 1.0 - fills.cost_per_share(best[0], rate), r["rid"]),
+             None if best[0] is None else 1.0 - fills.cost_per_share(best[0], rate), within, r["rid"]),
         )
     return len(rows)

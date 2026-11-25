@@ -81,10 +81,11 @@ def to_int(s: str) -> int | None:
 
 
 def store_blocks(
-    conn: sqlite3.Connection, product: str, blocks: list[Block], source: str, published: str | None
+    conn: sqlite3.Connection, product: str, blocks: list[Block], source: str, published: str | None,
+    fetched_ms: int | None = None,
 ) -> int:
     new = 0
-    ts = now_ms()
+    ts = fetched_ms or now_ms()
     for b in blocks:
         cur = conn.execute(
             """INSERT OR IGNORE INTO guidance_blocks(product, station, cycle, raw_block, source, published, fetched_ms)

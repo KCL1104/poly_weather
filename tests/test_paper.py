@@ -212,6 +212,8 @@ def test_measurements_follow_a_bracket_that_was_just_ruled_out(world):
     assert h2a.take_measurements(conn, BookHistory(settings, conn), engine.LIVE, SEEN + 70_000) == 2
     got = {r["offset_s"]: r for r in conn.execute("SELECT * FROM paper_measurements")}
     assert (got[0]["status"], got[0]["best_ask"], got[0]["fillable_usd"]) == ("ok", 0.93, pytest.approx(0.25 * (93 + 99)))
+    assert got[0]["fillable_at_threshold_usd"] == pytest.approx(0.25 * 93)     # 0.99 leaves less than the 2pp threshold
+    assert got[60]["fillable_at_threshold_usd"] == 0.0
     assert (got[60]["best_ask"], got[60]["edge"]) == (0.99, pytest.approx(1 - fills.cost_per_share(0.99, 0.01)))
     assert got[300]["status"] == "pending"
     h2a.take_measurements(conn, BookHistory(settings, conn), engine.LIVE, SEEN + ms(minutes=20))
@@ -425,12 +427,43 @@ def test_live_run_stays_behind_the_recording_and_never_handles_a_trigger_twice(w
     assert third.triggers == 0 and conn.execute("SELECT COUNT(*) FROM paper_fills WHERE variant='conservative'").fetchone()[0] == 1
 
 
-def test_live_run_without_a_running_recorder_still_moves_on(world):
+def test_a_stopped_recorder_holds_the_engine_until_it_is_back(world):
     conn, settings, markets = world["conn"], world["settings"], world["markets"]
     write_books(settings, no_books(markets, {"56-57°F": [[0.95, 4000.0]]}))
-    _recorder_state(settings, SEEN + 10_000, SEEN + 9_000)                           # last sign of life long ago
-    s = engine.run_live(conn, settings, now=SEEN + 3_600_000)
-    assert s.to_ms == SEEN + 3_600_000 - engine.LAG_MS and s.triggers == 1 and s.entered == 1
+    # The recorder wrote its last data 100 s after the report and has been silent since. The hole it is
+    # leaving is not logged yet, so the engine may not treat its last books as current ones.
+    _recorder_state(settings, SEEN + 101_000, SEEN + 100_000)
+    waiting = engine.run_live(conn, settings, now=SEEN + 3_600_000)
+    assert waiting.triggers == 0 and conn.execute("SELECT COUNT(*) FROM paper_signals").fetchone()[0] == 0
+
+    # It starts again, logs the hole, and records on: the report from before the stop is handled now.
+    conn.execute("INSERT INTO gaps(source, key, start_ms, end_ms, reason) VALUES('book', 'process', ?, ?, 'recorder restart')", (SEEN + 100_000, SEEN + 3_600_000))
+    _recorder_state(settings, SEEN + 3_900_000, SEEN + 3_899_000)
+    s = engine.run_live(conn, settings, now=SEEN + 3_900_000)
+    assert (s.triggers, s.entered) == (1, 1)
+
+
+def test_a_run_killed_half_way_continues_without_doing_anything_twice(world, monkeypatch):
+    conn, settings, markets = world["conn"], world["settings"], world["markets"]
+    write_books(settings, no_books(markets, {"56-57°F": [[0.95, 4000.0]]}))
+    cycle = dt.datetime(2026, 11, 9, 16, 30, tzinfo=UTC)
+    add_lamp(conn, cycle, [60] * 12, SEEN + 30_000, live=True)       # a second trigger half a minute after the report
+    _recorder_state(settings, SEEN + 601_000, SEEN + 600_000)
+
+    def killed(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as m:
+        m.setattr(engine, "_handle_lamp", killed)
+        with pytest.raises(KeyboardInterrupt):
+            engine.run_live(conn, settings, now=SEEN + 601_000)
+    assert conn.execute("SELECT COUNT(*) FROM paper_fills WHERE variant='conservative'").fetchone()[0] == 1   # the report was done
+    assert engine._cursor(conn) == SEEN                                                                     # and the cursor says so
+
+    again = engine.run_live(conn, settings, now=SEEN + 601_000)
+    assert again.triggers == 1                                          # only the LAMP cycle; the report is not handled again
+    assert conn.execute("SELECT COUNT(*) FROM paper_fills WHERE variant='conservative' AND ledger='H2a'").fetchone()[0] == 1
+    assert engine._cursor(conn) == SEEN + 600_000 - engine.LAG_MS
 
 
 # ---- whole sets of brackets ------------------------------------------------------------------------------
@@ -473,3 +506,28 @@ def test_no_shares_of_some_brackets_are_enough_for_a_sure_profit(world):
     row = conn.execute("SELECT * FROM paper_set_checks").fetchone()
     cost = 3 * fills.cost_per_share(0.60, 0.01)
     assert (row["side"], row["legs"]) == ("NO", 3) and row["edge"] == pytest.approx(2 - cost)
+
+
+# ---- the archive's time stamps are what "as of" rests on -------------------------------------------------
+
+
+class _Bulletins:
+    """Stands in for NOMADS: serves the fixture for the hourly bulletin, nothing for the extended one."""
+
+    def __init__(self, body: bytes):
+        self.body = body
+
+    def get(self, url, follow_redirects=False):
+        ok = url.endswith("lavtxt.ascii")
+        return type("R", (), {"status_code": 200 if ok else 404, "content": self.body if ok else b"", "headers": {}})()
+
+
+def test_a_cycle_archived_by_the_fetch_job_is_usable_at_its_own_trigger_time(conn, fixtures):
+    cycle = dt.datetime(2026, 11, 24, 9, 30, tzinfo=UTC)
+    assert lamp.archive_cycle(conn, _Bulletins((fixtures / "lav_sample_20261124_0930.txt").read_bytes()), cycle, {"KLGA"}) == 1
+    (ts, station, found), = engine.lamp_triggers(conn, 0, 2**62)
+    assert (station, found) == ("KLGA", cycle)
+    assert {r[0] for r in conn.execute("SELECT seen_ms FROM lamp_hourly")} == {ts}     # same stamp as the bulletin, not later
+    day_end = dt.datetime(2026, 11, 25, 5, tzinfo=UTC)
+    assert h2b.forecast_ahead(conn, "KLGA", cycle, cycle, day_end, seen_until_ms=ts) is not None
+    assert h2b.forecast_ahead(conn, "KLGA", cycle, cycle, day_end, seen_until_ms=ts - 1) is None
